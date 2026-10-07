@@ -66,7 +66,11 @@ class OpenAiProvider implements AiProvider {
   }
 
   @override
-  Future<NoteSummary> summarize(String text) async {
+  Future<NoteSummary> summarize(String text) async =>
+      summaryFromReply(await completeJson('$summaryPrompt$text'));
+
+  @override
+  Future<String> completeJson(String prompt) async {
     final res = await _client.post(
       Uri.parse('$_base/chat/completions'),
       headers: {..._auth, 'Content-Type': 'application/json'},
@@ -74,13 +78,12 @@ class OpenAiProvider implements AiProvider {
         'model': textModel,
         'response_format': {'type': 'json_object'},
         'messages': [
-          {'role': 'user', 'content': '$summaryPrompt$text'},
+          {'role': 'user', 'content': prompt},
         ],
       }),
     );
     checkStatus(res.statusCode, res.body, 'OpenAI');
     final j = jsonDecode(res.body) as Map<String, dynamic>;
-    final content = (j['choices'] as List).first['message']['content'] as String;
-    return summaryFromReply(content);
+    return (j['choices'] as List).first['message']['content'] as String;
   }
 }

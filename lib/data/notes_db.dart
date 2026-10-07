@@ -14,7 +14,7 @@ class NotesDb {
     final dir = await getDatabasesPath();
     final db = await openDatabase(
       p.join(dir, 'voice_notes.db'),
-      version: 1,
+      version: 2,
       onCreate: (db, _) => db.execute('''
         CREATE TABLE notes (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,8 +28,12 @@ class NotesDb {
           duration_ms INTEGER,
           created_at INTEGER NOT NULL,
           status TEXT NOT NULL,
-          error TEXT
+          error TEXT,
+          clinical TEXT
         )'''),
+      onUpgrade: (db, from, _) async {
+        if (from < 2) await db.execute('ALTER TABLE notes ADD COLUMN clinical TEXT');
+      },
     );
     return NotesDb._(db);
   }

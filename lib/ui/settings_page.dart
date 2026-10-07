@@ -35,7 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 32),
         children: [
-          const _Header('Provider'),
+          const _Header('Transcription provider'),
           RadioGroup<ProviderId>(
             groupValue: s.active,
             onChanged: (v) async {
@@ -46,7 +46,7 @@ class _SettingsPageState extends State<SettingsPage> {
             },
             child: Column(
               children: [
-                for (final id in ProviderId.values)
+                for (final id in ProviderId.values.where((p) => p.canTranscribe))
                   RadioListTile<ProviderId>(
                     value: id,
                     title: Text(id.label),
@@ -67,14 +67,62 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
           _KeyEditor(
-            key: ValueKey('editor_${s.active.name}'),
+            key: ValueKey('editor_${s.active.name}_${s.textActive == s.active}'),
             id: s.active,
             store: s,
+            showText: s.textActive == s.active,
             onSaved: () {
               setState(() {});
               state.refresh();
             },
           ),
+          const Divider(),
+          const _Header('Enrichment'),
+          SwitchListTile(
+            title: const Text('Use a different provider for text'),
+            subtitle: const Text(
+                'Titles, summaries and clinical notes can use another '
+                'provider, such as a free OpenRouter model, instead of the '
+                'transcription provider.'),
+            value: s.enrichment != null,
+            onChanged: (v) async {
+              await s.setEnrichment(v ? ProviderId.openrouter : null);
+              setState(() {});
+              state.refresh();
+            },
+          ),
+          if (s.enrichment != null) ...[
+            RadioGroup<ProviderId>(
+              groupValue: s.enrichment,
+              onChanged: (v) async {
+                if (v == null) return;
+                await s.setEnrichment(v);
+                setState(() {});
+                state.refresh();
+              },
+              child: Column(
+                children: [
+                  for (final id in ProviderId.values)
+                    RadioListTile<ProviderId>(
+                      value: id,
+                      title: Text(id.label),
+                      subtitle: Text(s.hasKey(id) ? 'Key saved' : 'No key yet'),
+                    ),
+                ],
+              ),
+            ),
+            if (s.enrichment != s.active)
+              _KeyEditor(
+                key: ValueKey('editor_text_${s.enrichment!.name}'),
+                id: s.enrichment!,
+                store: s,
+                showStt: false,
+                onSaved: () {
+                  setState(() {});
+                  state.refresh();
+                },
+              ),
+          ],
           const Divider(),
           const _Header('Text size'),
           Padding(
@@ -84,6 +132,35 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: state.setTextScale,
             ),
           ),
+          const Divider(),
+          const _Header('I use this for'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('General notes')),
+                ButtonSegment(value: true, label: Text('Clinical work')),
+              ],
+              selected: {s.clinical},
+              onSelectionChanged: (v) async {
+                await s.setClinical(v.first);
+                setState(() {});
+                state.refresh();
+              },
+            ),
+          ),
+          if (s.clinical)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                'Adds a "Create clinical note" option to each transcript: an '
+                'interpretation, a formatted note in English and the spoken '
+                'language, and a list of items to verify. These are AI-generated '
+                'drafts and must be reviewed by a clinician. The text is sent '
+                'to your chosen provider; do not use it where patient data may '
+                'not leave your organisation.',
+              ),
+            ),
           const Divider(),
           const _Header('Behaviour'),
           SwitchListTile(
@@ -135,8 +212,16 @@ class _KeyEditor extends StatefulWidget {
   final ProviderId id;
   final SettingsStore store;
   final VoidCallback onSaved;
-  const _KeyEditor(
-      {super.key, required this.id, required this.store, required this.onSaved});
+  final bool showStt;
+  final bool showText;
+  const _KeyEditor({
+    super.key,
+    required this.id,
+    required this.store,
+    required this.onSaved,
+    this.showStt = true,
+    this.showText = true,
+  });
 
   @override
   State<_KeyEditor> createState() => _KeyEditorState();
@@ -158,8 +243,11 @@ class _KeyEditorState extends State<_KeyEditor> {
 
   Future<void> _save() async {
     await widget.store.setApiKey(widget.id, _key.text);
-    await widget.store
-        .setModels(widget.id, stt: _stt.text, text: _text.text);
+    await widget.store.setModels(
+      widget.id,
+      stt: widget.showStt && widget.id.canTranscribe ? _stt.text : null,
+      text: widget.showText ? _text.text : null,
+    );
     widget.onSaved();
     if (mounted) {
       FocusScope.of(context).unfocus();
@@ -193,26 +281,30 @@ class _KeyEditorState extends State<_KeyEditor> {
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _stt,
-            autocorrect: false,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              labelText: 'Transcription model',
-              helperText: 'Default: ${d.stt}',
+          if (widget.showStt && widget.id.canTranscribe) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _stt,
+              autocorrect: false,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                labelText: 'Transcription model',
+                helperText: 'Default: ${d.stt}',
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _text,
-            autocorrect: false,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              labelText: 'Summary model',
-              helperText: 'Default: ${d.text}',
+          ],
+          if (widget.showText) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _text,
+              autocorrect: false,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                labelText: 'Text model (summary, clinical note)',
+                helperText: 'Default: ${d.text}',
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 12),
           FilledButton(onPressed: _save, child: const Text('Save')),
         ],

@@ -82,6 +82,44 @@ void main() {
     });
   });
 
+  group('Sarvam m4a conversion', () {
+    test('converts to WAV and uses the instant endpoint, then cleans up', () async {
+      const fmt = WavFormat(1, 16000, 16);
+      final wav = tempAudio(
+          'conv.wav', buildWav(fmt, Uint8List(fmt.bytesPerSecond * 5)));
+      final src = tempAudio('note.m4a', [1, 2, 3]);
+      final paths = <String>[];
+      final client = MockClient((req) async {
+        paths.add(req.url.path);
+        return json({'transcript': 'హలో', 'language_code': 'te-IN'});
+      });
+      final t = await SarvamProvider(
+        apiKey: 'k',
+        client: client,
+        toWav: (_) async => wav,
+      ).transcribe(src, translate: false);
+      expect(paths, ['/speech-to-text']);
+      expect(t.text, 'హలో');
+      expect(t.languageCode, 'te-IN');
+      expect(wav.existsSync(), isFalse);
+    });
+
+    test('falls back to the batch API when conversion is unavailable', () async {
+      final src = tempAudio('note.m4a', [1, 2, 3]);
+      final paths = <String>[];
+      final client = MockClient((req) async {
+        paths.add(req.url.path);
+        return http.Response('stop', 500);
+      });
+      await expectLater(
+        SarvamProvider(apiKey: 'k', client: client, toWav: (_) async => null)
+            .transcribe(src, translate: false),
+        throwsA(isA<ProviderException>()),
+      );
+      expect(paths.first, '/speech-to-text/job/v1');
+    });
+  });
+
   group('Sarvam batch (m4a)', () {
     test('walks create, upload, start, poll and download', () async {
       final file = tempAudio('note.m4a', List.filled(100, 1));
@@ -91,7 +129,8 @@ void main() {
         seen.add('${req.method} ${req.url.host}$path');
         if (req.method == 'PUT') return http.Response('', 201);
         if (path == '/speech-to-text/job/v1') return json({'job_id': 'j1'});
-        if (path.endsWith('/upload-files')) {
+        if (path == '/speech-to-text/job/v1/upload-files') {
+          expect(jsonDecode(req.body)['job_id'], 'j1');
           return json({
             'upload_urls': {
               'note.m4a': {'file_url': 'https://blob.example.com/u'},
@@ -104,6 +143,9 @@ void main() {
             'job_state': 'Completed',
             'job_details': [
               {
+                'inputs': [
+                  {'file_name': 'note.m4a'},
+                ],
                 'outputs': [
                   {'file_name': '0.json'},
                 ],
@@ -112,6 +154,7 @@ void main() {
           });
         }
         if (path.endsWith('/download-files')) {
+          expect(jsonDecode(req.body)['files'], ['0.json']);
           return json({
             'download_urls': {
               '0.json': {'file_url': 'https://blob.example.com/d'},

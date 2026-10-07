@@ -22,13 +22,17 @@ class SarvamProvider implements AiProvider {
   final Duration pollInterval;
   final Duration batchTimeout;
 
+  /// Converts non-WAV audio to a 16 kHz mono WAV file (null = cannot).
+  final Future<File?> Function(File)? toWav;
+
   SarvamProvider({
     required this.apiKey,
     this.sttModel = 'saaras:v3',
-    this.textModel = 'sarvam-m',
+    this.textModel = 'sarvam-105b',
     http.Client? client,
     this.pollInterval = const Duration(seconds: 4),
     this.batchTimeout = const Duration(minutes: 15),
+    this.toWav,
   }) : _client = client ?? http.Client();
 
   @override
@@ -41,20 +45,35 @@ class SarvamProvider implements AiProvider {
 
   @override
   Future<Transcription> transcribe(File audio, {required bool translate}) async {
-    final bytes = await audio.readAsBytes();
     final isWav = p.extension(audio.path).toLowerCase() == '.wav';
+    if (isWav) return _transcribeWav(await audio.readAsBytes(), translate);
 
-    if (!isWav) {
-      final original = await _batch(audio, bytes, 'transcribe');
-      final english =
-          translate ? (await _batch(audio, bytes, 'translate')).text : '';
-      return Transcription(
-        text: original.text,
-        english: english,
-        languageCode: original.languageCode,
-      );
+    // The instant endpoint reads speech reliably from 16 kHz mono WAV, while
+    // the batch job returned empty transcripts for raw m4a. So convert first
+    // and use the batch API only if the platform cannot.
+    final converted = await toWav?.call(audio);
+    if (converted != null) {
+      try {
+        return await _transcribeWav(await converted.readAsBytes(), translate);
+      } finally {
+        try {
+          await converted.delete();
+        } catch (_) {}
+      }
     }
 
+    final bytes = await audio.readAsBytes();
+    final original = await _batch(audio, bytes, 'transcribe');
+    final english =
+        translate ? (await _batch(audio, bytes, 'translate')).text : '';
+    return Transcription(
+      text: original.text,
+      english: english,
+      languageCode: original.languageCode,
+    );
+  }
+
+  Future<Transcription> _transcribeWav(Uint8List bytes, bool translate) async {
     final native = <String>[];
     final english = <String>[];
     String? language;
@@ -112,8 +131,9 @@ class SarvamProvider implements AiProvider {
     }
 
     final upload = await _postJson(
-      '$_base/speech-to-text/job/v1/$jobId/upload-files',
+      '$_base/speech-to-text/job/v1/upload-files',
       {
+        'job_id': jobId,
         'files': [name],
       },
       jsonHeaders,
@@ -155,7 +175,7 @@ class SarvamProvider implements AiProvider {
       await Future<void>.delayed(pollInterval);
     }
 
-    final outputName = findString(status, 'file_name') ?? '0.json';
+    final outputName = outputFileName(status) ?? '0.json';
     final dl = await _postJson('$_base/speech-to-text/job/v1/download-files', {
       'job_id': jobId,
       'files': [outputName],
@@ -188,7 +208,11 @@ class SarvamProvider implements AiProvider {
   // ---- Text model ----------------------------------------------------------
 
   @override
-  Future<NoteSummary> summarize(String text) async {
+  Future<NoteSummary> summarize(String text) async =>
+      summaryFromReply(await completeJson('$summaryPrompt$text'));
+
+  @override
+  Future<String> completeJson(String prompt) async {
     final res = await _client.post(
       Uri.parse('$_base/v1/chat/completions'),
       headers: {
@@ -199,15 +223,32 @@ class SarvamProvider implements AiProvider {
       body: jsonEncode({
         'model': textModel,
         'messages': [
-          {'role': 'user', 'content': '$summaryPrompt$text'},
+          {'role': 'user', 'content': prompt},
         ],
       }),
     );
     checkStatus(res.statusCode, res.body, 'Sarvam');
     final j = jsonDecode(res.body) as Map<String, dynamic>;
-    final content = (j['choices'] as List).first['message']['content'] as String;
-    return summaryFromReply(content);
+    return (j['choices'] as List).first['message']['content'] as String;
   }
+}
+
+/// The first result file listed in a job status (`job_details[].outputs[]`),
+/// ignoring the `inputs` entries that carry the uploaded file's own name.
+String? outputFileName(dynamic status) {
+  final details = status is Map ? status['job_details'] : null;
+  if (details is List) {
+    for (final d in details) {
+      final outputs = d is Map ? d['outputs'] : null;
+      if (outputs is List) {
+        for (final o in outputs) {
+          final name = o is Map ? o['file_name'] : null;
+          if (name is String && name.isNotEmpty) return name;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /// Depth-first search for the first string value stored under [key].
