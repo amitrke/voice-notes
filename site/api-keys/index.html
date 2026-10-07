@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How to get an API key | Voice Notes</title>
+  <meta name="description" content="Step-by-step guides for getting a Sarvam, OpenAI or Google Gemini API key to use with Voice Notes.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+  <h1>How to get an API key</h1>
+  <p class="lead">Voice Notes has no servers and no subscription. You bring your own key from one AI provider, and the app talks to that provider directly from your phone. Pick one below. You only need one.</p>
+
+  <div class="card">
+    <h2>Which one should I choose?</h2>
+    <table>
+      <tr><th>Provider</th><th>Cost</th><th>Good for</th></tr>
+      <tr>
+        <td><a href="#gemini">Google Gemini</a></td>
+        <td>Free tier available <span class="muted">(as of October 2026)</span></td>
+        <td>Trying the app at no cost. Transcribes and translates in one step.</td>
+      </tr>
+      <tr>
+        <td><a href="#sarvam">Sarvam</a></td>
+        <td>Free credits when you sign up, then pay as you go</td>
+        <td>Indian languages, with automatic language detection.</td>
+      </tr>
+      <tr>
+        <td><a href="#openai">OpenAI</a></td>
+        <td>Paid, from prepaid credit</td>
+        <td>General use. Whisper handles many languages.</td>
+      </tr>
+    </table>
+    <p class="muted">Prices, free tiers and limits are set by the providers and change. Check each provider's own page before relying on them.</p>
+  </div>
+
+  <div class="card" id="gemini">
+    <h2>Google Gemini <span class="badge">Free tier</span></h2>
+    <p><strong>As of October 2026, Google offers a free tier for the Gemini API.</strong> It has usage limits, which Google can change, so check Google AI Studio for the current ones.</p>
+    <ol>
+      <li>Open <a href="https://aistudio.google.com/apikey" rel="noopener">Google AI Studio, API keys</a> and sign in with a Google account.</li>
+      <li>Choose <strong>Create API key</strong>. Pick a project, or let it create one for you.</li>
+      <li>Copy the key.</li>
+      <li>In Voice Notes, open <strong>Settings</strong>, choose <strong>Google Gemini</strong>, paste the key into <strong>API key</strong>, and tap <strong>Save</strong>.</li>
+    </ol>
+    <div class="note"><strong>Privacy on the free tier.</strong> Google's terms say that on the unpaid Gemini API tier, your content may be used to improve its products. Your voice notes are sent to Gemini, so avoid recording anything sensitive while you use the free tier, or use a paid key. Read <a href="https://ai.google.dev/gemini-api/terms" rel="noopener">Google's Gemini API terms</a> for the current wording.</div>
+  </div>
+
+  <div class="card" id="sarvam">
+    <h2>Sarvam</h2>
+    <p>Built for Indian languages. New accounts get free credits, which do not expire. After that, speech-to-text is billed by the hour of audio.</p>
+    <ol>
+      <li>Open the <a href="https://dashboard.sarvam.ai" rel="noopener">Sarvam dashboard</a> and sign up or sign in.</li>
+      <li>Go to the <strong>API keys</strong> section and create a new key.</li>
+      <li>Copy the key.</li>
+      <li>In Voice Notes, open <strong>Settings</strong>, choose <strong>Sarvam</strong>, paste the key, and tap <strong>Save</strong>.</li>
+    </ol>
+    <p class="muted">See <a href="https://www.sarvam.ai/api-pricing" rel="noopener">Sarvam's pricing page</a> for the current free credits and rates.</p>
+  </div>
+
+  <div class="card" id="openai">
+    <h2>OpenAI</h2>
+    <p>OpenAI's API is paid and separate from a ChatGPT subscription. You add prepaid credit, and each request uses some of it.</p>
+    <ol>
+      <li>Open the <a href="https://platform.openai.com/api-keys" rel="noopener">OpenAI API keys page</a> and sign in.</li>
+      <li>Add a payment method and some credit under <strong>Billing</strong> if you have not already.</li>
+      <li>Choose <strong>Create new secret key</strong>, give it a name such as "Voice Notes", and copy it. OpenAI shows the key only once.</li>
+      <li>In Voice Notes, open <strong>Settings</strong>, choose <strong>OpenAI</strong>, paste the key, and tap <strong>Save</strong>.</li>
+    </ol>
+    <p class="muted">Consider setting a monthly spending limit in your OpenAI billing settings.</p>
+  </div>
+
+  <div class="card">
+    <h2>Keeping your key safe</h2>
+    <ul>
+      <li>Voice Notes stores your key in your phone's secure storage, and sends it only to the provider it belongs to.</li>
+      <li>Never share a key or post it anywhere public. Anyone with it can spend your credit.</li>
+      <li>If a key leaks, delete it in the provider's dashboard and create a new one. Then paste the new one into Settings.</li>
+      <li>Audio and transcripts go to the provider you chose. Each provider has its own privacy policy.</li>
+    </ul>
+  </div>
+
+  <footer class="muted">
+    <a href="../">Voice Notes</a> &middot; Last updated October 2026
+  </footer>
+</main>
+</body>
+</html>

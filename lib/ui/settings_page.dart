@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
+import 'links.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -13,6 +15,16 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  Future<void> _openGuide(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await launchUrl(Uri.parse(apiKeyGuideUrl),
+        mode: LaunchMode.externalApplication);
+    if (!ok) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Could not open the guide: $apiKeyGuideUrl')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -42,6 +54,15 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
               ],
             ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.help_outline),
+            title: const Text('How to get an API key'),
+            subtitle: const Text(
+                'Step-by-step guides for Sarvam, OpenAI and Gemini. '
+                'As of October 2026, Gemini has a free tier.'),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () => _openGuide(context),
           ),
           const Divider(),
           _KeyEditor(
