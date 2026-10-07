@@ -58,6 +58,27 @@ with its `platforms` input. Unset means on.
 The upload key lives outside the repo (`C:\Users\amitr\dev\keystores\voice-notes\`). Back it up: losing it
 means asking Google to reset the upload key.
 
+### Android: the shared Play service account
+
+One service account serves every Android app on the Play developer account:
+`play-release@subnext-play-release.iam.gserviceaccount.com`, in its own Cloud project `subnext-play-release`
+(Google Play Android Developer API enabled, no Cloud roles). In Play Console it has the **account-level**
+permission "Release apps to testing tracks" only. That covers every app, including future ones, and cannot
+publish to production, edit store listings or manage testers.
+
+Give another app's repo its own key, so each can be revoked alone:
+
+```bash
+gcloud iam service-accounts keys create key.json \
+  --iam-account=play-release@subnext-play-release.iam.gserviceaccount.com \
+  --project subnext-play-release
+gh secret set PLAY_SERVICE_ACCOUNT_JSON -R <owner>/<repo> < key.json
+rm key.json
+```
+
+Revoke one repo's key with `gcloud iam service-accounts keys list` then `keys delete <KEY_ID>` (the key ID is in the
+JSON's `private_key_id`). Keys must not be committed; delete the downloaded file as shown.
+
 ### Android: the first bundle goes up by hand
 
 Play's API cannot create an app's first release. Upload `app-release.aab` once in Play Console
