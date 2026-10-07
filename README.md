@@ -10,10 +10,24 @@ key; nothing goes through any server of ours.
 |---|---|---|---|---|
 | Sarvam | `saaras:v3` | `translate` mode | yes (`unknown` → detected) | 16 kHz mono WAV, split into 25 s chunks (sync API limit is ~30 s) |
 | OpenAI | `whisper-1` | Whisper translations endpoint | yes | m4a (25 MB limit) |
-| Google Gemini | `gemini-2.5-flash` | one prompt returns both | yes | m4a (about 14 MB inline limit) |
+| Google Gemini | `gemini-3.5-flash` | one prompt returns both | yes | m4a (about 14 MB inline limit) |
 
 Model names are editable in Settings, so you do not need an app update when providers rename models.
-Imported non-WAV files with Sarvam use its asynchronous batch job API (up to 2 hours of audio).
+Imported non-WAV files with Sarvam are first decoded on the device to 16 kHz mono WAV (Android
+`MediaCodec`, iOS `AVAudioConverter`) and then sent through the same chunked sync API as recordings. Sarvam's
+batch job API returned empty transcripts for raw m4a, so it is only the fallback when decoding fails.
+
+### Enrichment (titles, summaries, clinical notes)
+
+Text work can use a different provider from transcription (Settings > Enrichment). OpenRouter is available
+there as a text-only option (default model `openrouter/free`, which picks an available free model). It cannot
+transcribe audio, so it is not offered as the transcription provider.
+
+### Clinical mode
+
+Settings > "I use this for" > Clinical work adds a "Create clinical note" button to each transcript: an
+interpretation, a clinical note in English and the spoken language, and items to verify, with TXT export.
+Output is an AI-generated draft and must be reviewed by a clinician.
 
 ## Privacy
 

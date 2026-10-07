@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import '../ui/format.dart';
 import 'notes_db.dart';
 import 'settings_store.dart';
 
@@ -130,8 +131,9 @@ class AppState extends ChangeNotifier {
         done = done.copyWith(title: _fallbackTitle(t.english.isNotEmpty ? t.english : t.text));
       }
       await _save(done);
-      if (settings.autoSummary && t.text.trim().isNotEmpty) {
-        await _summarize(done, provider);
+      final text = settings.build(settings.textActive);
+      if (settings.autoSummary && t.text.trim().isNotEmpty && text != null) {
+        await _summarize(done, text);
       }
     } catch (e) {
       await _save(note.copyWith(
@@ -152,12 +154,37 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Builds (or rebuilds) the clinical write-up for a finished note. Returns an
+  /// error message, or null on success.
+  Future<String?> enrichClinical(int id) async {
+    final n = byId(id);
+    if (n == null) return null;
+    final provider = settings.build(settings.textActive);
+    if (provider == null) {
+      return 'Add an API key for ${settings.textActive.label} in Settings.';
+    }
+    try {
+      final report = await buildClinicalReport(
+        provider,
+        transcript: n.transcript,
+        english: n.english,
+        language: languageLabel(n.languageCode),
+      );
+      await _save(n.copyWith(clinical: report));
+      return null;
+    } catch (e) {
+      return _describe(e);
+    }
+  }
+
   /// Re-runs title/summary generation for an existing note.
   Future<String?> regenerateSummary(int id) async {
     final n = byId(id);
     if (n == null) return null;
-    final provider = settings.build(settings.active);
-    if (provider == null) return 'Add an API key for ${settings.active.label} in Settings.';
+    final provider = settings.build(settings.textActive);
+    if (provider == null) {
+      return 'Add an API key for ${settings.textActive.label} in Settings.';
+    }
     try {
       final source = n.english.isNotEmpty ? n.english : n.transcript;
       final s = await provider.summarize(source);

@@ -4,9 +4,12 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../data/app_state.dart';
+import '../data/clinical_export.dart';
 import '../models/note.dart';
 import 'format.dart';
 import 'text_size.dart';
@@ -21,6 +24,24 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> {
   bool _showEnglish = false;
+  bool _enriching = false;
+
+  Future<void> _enrich(AppState state, int id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _enriching = true);
+    final err = await state.enrichClinical(id);
+    if (mounted) setState(() => _enriching = false);
+    if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
+  }
+
+  Future<void> _exportTxt(Note note) async {
+    final dir = await getTemporaryDirectory();
+    final safe = note.title.replaceAll(RegExp(r'[^\w\- ]+'), '').trim();
+    final file =
+        File('${dir.path}/${safe.isEmpty ? 'clinical-note' : safe}.txt');
+    await file.writeAsString(clinicalReportText(note));
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+  }
 
   Future<void> _delete(AppState state) async {
     final ok = await showDialog<bool>(
@@ -86,6 +107,8 @@ class _NotePageState extends State<NotePage> {
                 if (err != null) {
                   messenger.showSnackBar(SnackBar(content: Text(err)));
                 }
+              } else if (v == 'clinical') {
+                await _enrich(state, note.id!);
               } else if (v == 'retry') {
                 await state.retry(note.id!);
               }
@@ -94,6 +117,9 @@ class _NotePageState extends State<NotePage> {
               if (note.status == NoteStatus.done)
                 const PopupMenuItem(
                     value: 'summary', child: Text('Regenerate summary')),
+              if (note.status == NoteStatus.done && note.clinical != null)
+                const PopupMenuItem(
+                    value: 'clinical', child: Text('Regenerate clinical note')),
               const PopupMenuItem(
                   value: 'retry', child: Text('Transcribe again')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -186,11 +212,128 @@ class _NotePageState extends State<NotePage> {
                   label: const Text('Copy'),
                 ),
               ),
+            if (note.transcript.trim().isNotEmpty)
+              ..._clinicalSection(state, note),
           ],
         ],
       ),
     );
   }
+}
+
+extension on _NotePageState {
+  List<Widget> _clinicalSection(AppState state, Note note) {
+    final c = note.clinical;
+    if (c == null) {
+      if (!state.settings.clinical) return const [];
+      return [
+        const Divider(height: 32),
+        FilledButton.icon(
+          onPressed: _enriching ? null : () => _enrich(state, note.id!),
+          icon: _enriching
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.medical_services_outlined),
+          label: Text(_enriching ? 'Working…' : 'Create clinical note'),
+        ),
+      ];
+    }
+    final lang = languageLabel(note.languageCode);
+    return [
+      const Divider(height: 32),
+      Text('Clinical scribe', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 8),
+      if (c.verify.isNotEmpty) _VerifyCard(items: c.verify),
+      if (c.interpretation.isNotEmpty)
+        _ClinicalCard(
+            title: 'Clinical interpretation',
+            body: c.interpretation,
+            onCopy: () => _copy(c.interpretation, 'Interpretation')),
+      if (c.noteEnglish.isNotEmpty)
+        _ClinicalCard(
+            title: 'Clinical note — English',
+            body: c.noteEnglish,
+            onCopy: () => _copy(c.noteEnglish, 'Clinical note')),
+      if (c.noteNative.isNotEmpty)
+        _ClinicalCard(
+            title: 'Clinical note — ${lang ?? 'original language'}',
+            body: c.noteNative,
+            onCopy: () => _copy(c.noteNative, 'Clinical note')),
+      const SizedBox(height: 4),
+      Wrap(spacing: 8, children: [
+        OutlinedButton.icon(
+          onPressed: () => _exportTxt(note),
+          icon: const Icon(Icons.ios_share, size: 18),
+          label: const Text('Export TXT'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => _copy(clinicalReportText(note), 'Full report'),
+          icon: const Icon(Icons.copy, size: 18),
+          label: const Text('Copy all'),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      Text(
+        'AI-generated draft. A clinician must review it before use.',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    ];
+  }
+}
+
+class _ClinicalCard extends StatelessWidget {
+  final String title;
+  final String body;
+  final VoidCallback onCopy;
+  const _ClinicalCard(
+      {required this.title, required this.body, required this.onCopy});
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.labelLarge)),
+                IconButton(
+                    tooltip: 'Copy',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onCopy,
+                    icon: const Icon(Icons.copy, size: 18)),
+              ]),
+              SelectableText(body, style: const TextStyle(height: 1.5)),
+            ],
+          ),
+        ),
+      );
+}
+
+class _VerifyCard extends StatelessWidget {
+  final List<String> items;
+  const _VerifyCard({required this.items});
+
+  @override
+  Widget build(BuildContext context) => Card(
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Verification required',
+                  style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 4),
+              for (final i in items) SelectableText('⚠ $i'),
+            ],
+          ),
+        ),
+      );
 }
 
 class _AudioBar extends StatefulWidget {

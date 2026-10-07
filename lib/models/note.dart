@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import '../providers/ai_provider.dart';
+
 enum NoteStatus { processing, done, failed }
 
 class Note {
@@ -13,6 +17,7 @@ class Note {
   final DateTime createdAt;
   final NoteStatus status;
   final String? error;
+  final ClinicalReport? clinical;
 
   const Note({
     this.id,
@@ -27,6 +32,7 @@ class Note {
     required this.createdAt,
     this.status = NoteStatus.processing,
     this.error,
+    this.clinical,
   });
 
   Note copyWith({
@@ -39,6 +45,7 @@ class Note {
     String? provider,
     NoteStatus? status,
     String? error,
+    ClinicalReport? clinical,
     bool clearError = false,
   }) =>
       Note(
@@ -54,6 +61,7 @@ class Note {
         createdAt: createdAt,
         status: status ?? this.status,
         error: clearError ? null : (error ?? this.error),
+        clinical: clinical ?? this.clinical,
       );
 
   Map<String, Object?> toMap() => {
@@ -69,6 +77,7 @@ class Note {
         'created_at': createdAt.millisecondsSinceEpoch,
         'status': status.name,
         'error': error,
+        'clinical': clinical == null ? null : jsonEncode(clinical!.toJson()),
       };
 
   factory Note.fromMap(Map<String, Object?> m) => Note(
@@ -87,5 +96,15 @@ class Note {
           orElse: () => NoteStatus.failed,
         ),
         error: m['error'] as String?,
+        clinical: _clinicalFrom(m['clinical'] as String?),
       );
+
+  static ClinicalReport? _clinicalFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return ClinicalReport.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
 }
