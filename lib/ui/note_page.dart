@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import '../data/app_state.dart';
 import '../data/clinical_export.dart';
 import '../models/note.dart';
+import 'audio_input.dart';
 import 'format.dart';
 import 'text_size.dart';
 
@@ -43,12 +44,42 @@ class _NotePageState extends State<NotePage> {
     await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 
+  bool _regenerating = false;
+
+  Future<void> _regenerate(AppState state, int id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _regenerating = true);
+    final err = await state.regenerate(id);
+    if (mounted) setState(() => _regenerating = false);
+    if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
+  }
+
+  Future<void> _deleteSegment(AppState state, Note note, Segment seg) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete this recording?'),
+        content: const Text(
+            'Its audio and text are removed from the note. The summary will be marked out of date.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) await state.deleteSegment(note.id!, seg.id!);
+  }
+
   Future<void> _delete(AppState state) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete this note?'),
-        content: const Text('The transcript and the audio file will be removed.'),
+        content: const Text('The transcript and all its audio files will be removed.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -101,25 +132,19 @@ class _NotePageState extends State<NotePage> {
             onSelected: (v) async {
               if (v == 'delete') {
                 await _delete(state);
-              } else if (v == 'summary') {
-                final messenger = ScaffoldMessenger.of(context);
-                final err = await state.regenerateSummary(note.id!);
-                if (err != null) {
-                  messenger.showSnackBar(SnackBar(content: Text(err)));
-                }
-              } else if (v == 'clinical') {
-                await _enrich(state, note.id!);
+              } else if (v == 'regenerate') {
+                await _regenerate(state, note.id!);
               } else if (v == 'retry') {
                 await state.retry(note.id!);
               }
             },
             itemBuilder: (_) => [
               if (note.status == NoteStatus.done)
-                const PopupMenuItem(
-                    value: 'summary', child: Text('Regenerate summary')),
-              if (note.status == NoteStatus.done && note.clinical != null)
-                const PopupMenuItem(
-                    value: 'clinical', child: Text('Regenerate clinical note')),
+                PopupMenuItem(
+                    value: 'regenerate',
+                    child: Text(note.clinical != null
+                        ? 'Regenerate summary and clinical note'
+                        : 'Regenerate summary')),
               const PopupMenuItem(
                   value: 'retry', child: Text('Transcribe again')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -139,38 +164,45 @@ class _NotePageState extends State<NotePage> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
-          _AudioBar(path: note.audioPath),
+          if (note.isStale && note.status != NoteStatus.processing)
+            _StaleBanner(
+              message: note.clinical != null
+                  ? 'Recordings changed after the title, summary and clinical '
+                      'note were written, so they may no longer match.'
+                  : 'Recordings changed after the title and summary were '
+                      'written, so they may no longer match.',
+              busy: _regenerating,
+              onRegenerate: () => _regenerate(state, note.id!),
+            ),
+          for (final (i, seg) in note.segments.indexed)
+            _SegmentTile(
+              key: ValueKey(seg.id),
+              index: i,
+              segment: seg,
+              count: note.segments.length,
+              onRetry: () => state.retrySegment(note.id!, seg.id!),
+              onDelete: () => _deleteSegment(state, note, seg),
+            ),
+          Text('Add recording', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => recordAudio(context, noteId: note.id),
+                icon: const Icon(Icons.mic, size: 18),
+                label: const Text('Record'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => importAudio(context, noteId: note.id),
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('Import'),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
-          if (note.status == NoteStatus.processing)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Center(
-                child: Column(children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 12),
-                  Text('Transcribing…'),
-                ]),
-              ),
-            ),
-          if (note.status == NoteStatus.failed)
-            Card(
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(note.error ?? 'Transcription failed.'),
-                    const SizedBox(height: 8),
-                    FilledButton.tonal(
-                      onPressed: () => state.retry(note.id!),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          if (note.status == NoteStatus.done) ...[
+          if (note.status == NoteStatus.done ||
+              note.transcript.trim().isNotEmpty) ...[
             if (note.summary.isNotEmpty)
               Card(
                 child: Padding(
@@ -245,6 +277,13 @@ extension on _NotePageState {
       const Divider(height: 32),
       Text('Clinical scribe', style: Theme.of(context).textTheme.titleMedium),
       const SizedBox(height: 8),
+      if (note.isStale)
+        _StaleBanner(
+          message: 'This clinical note was written before the recordings '
+              'changed. Do not rely on it until it is regenerated.',
+          busy: _regenerating,
+          onRegenerate: () => _regenerate(state, note.id!),
+        ),
       if (c.verify.isNotEmpty) _VerifyCard(items: c.verify),
       if (c.interpretation.isNotEmpty)
         _ClinicalCard(
@@ -334,6 +373,128 @@ class _VerifyCard extends StatelessWidget {
           ),
         ),
       );
+}
+
+class _StaleBanner extends StatelessWidget {
+  final String message;
+  final bool busy;
+  final VoidCallback onRegenerate;
+  const _StaleBanner(
+      {required this.message, required this.busy, required this.onRegenerate});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: scheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.update, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Text('Out of date',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onErrorContainer)),
+            ]),
+            const SizedBox(height: 4),
+            Text(message, style: TextStyle(color: scheme.onErrorContainer)),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: busy ? null : onRegenerate,
+              icon: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh, size: 18),
+              label: Text(busy ? 'Working…' : 'Regenerate'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One recording of a note: its player and, until it is done, its status.
+class _SegmentTile extends StatelessWidget {
+  final int index;
+  final int count;
+  final Segment segment;
+  final VoidCallback onRetry;
+  final VoidCallback onDelete;
+  const _SegmentTile({
+    super.key,
+    required this.index,
+    required this.count,
+    required this.segment,
+    required this.onRetry,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final seg = segment;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (count > 1)
+            Row(children: [
+              Expanded(
+                child: Text(
+                  [
+                    'Recording ${index + 1}',
+                    if (seg.durationMs != null) formatDuration(seg.durationMs!),
+                  ].join(' · '),
+                  style: theme.textTheme.labelLarge,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Delete this recording',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: onDelete,
+              ),
+            ]),
+          _AudioBar(path: seg.audioPath),
+          if (seg.status == NoteStatus.processing)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Row(children: [
+                SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 12),
+                Text('Transcribing…'),
+              ]),
+            ),
+          if (seg.status == NoteStatus.failed)
+            Card(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(seg.error ?? 'Transcription failed.'),
+                    const SizedBox(height: 8),
+                    FilledButton.tonal(
+                        onPressed: onRetry, child: const Text('Retry')),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AudioBar extends StatefulWidget {

@@ -46,7 +46,7 @@ void main() {
   test('report survives a database round trip and exports as text', () {
     final report = ClinicalReport.fromJson(extractJsonObject(reply));
     final note = Note(
-      audioPath: '/a/pranav_audio.m4a',
+      segments: const [Segment(audioPath: '/a/pranav_audio.m4a')],
       provider: 'gemini',
       createdAt: DateTime(2026, 10, 7),
       languageCode: 'te-IN',
@@ -54,7 +54,7 @@ void main() {
       english: 'fever',
       clinical: report,
     );
-    final back = Note.fromMap({...note.toMap(), 'id': 1});
+    final back = Note.fromMap({...note.toMap(), 'id': 1}, note.segments);
     expect(back.clinical!.verify, hasLength(2));
 
     final text = clinicalReportText(back);

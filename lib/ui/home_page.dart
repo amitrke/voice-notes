@@ -1,50 +1,15 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
 import '../models/note.dart';
-import '../services/recorder_service.dart';
+import 'audio_input.dart';
 import 'format.dart';
 import 'note_page.dart';
-import 'record_sheet.dart';
 import 'settings_page.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
-
-  Future<void> _record(BuildContext context) async {
-    final state = context.read<AppState>();
-    final result = await showModalBottomSheet<RecordingResult>(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      builder: (_) =>
-          RecordSheet(format: state.settings.active.recordingFormat),
-    );
-    if (result != null) {
-      await state.addAudio(result.path, durationMs: result.durationMs);
-    }
-  }
-
-  Future<void> _import(BuildContext context) async {
-    final state = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    final picked = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: const [
-        'm4a', 'mp3', 'wav', 'aac', 'ogg', 'opus', 'flac', 'mp4', 'amr', 'webm'
-      ],
-    );
-    final path = picked?.path;
-    if (path == null) return;
-    try {
-      final stored = await state.importFile(path);
-      await state.addAudio(stored);
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Could not import: $e')));
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +22,7 @@ class HomePage extends StatelessWidget {
           IconButton(
             tooltip: 'Import audio',
             icon: const Icon(Icons.upload_file),
-            onPressed: () => _import(context),
+            onPressed: () => importAudio(context),
           ),
           IconButton(
             tooltip: 'Settings',
@@ -68,7 +33,7 @@ class HomePage extends StatelessWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _record(context),
+        onPressed: () => recordAudio(context),
         icon: const Icon(Icons.mic),
         label: const Text('Record'),
       ),
