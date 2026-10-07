@@ -1,0 +1,75 @@
+name: Build
+
+# Android APKs for testing on real hardware without going through a store.
+# Manual only: release builds take minutes, and the artifacts are wanted at the
+# point someone is about to test on a device, not on every push.
+#
+# Needs no secrets, so it can run on any branch without anyone holding the
+# upload key. With no android/key.properties, Gradle falls back to the debug
+# key, which is fine for sideloading and useless for a store. Store builds come
+# from release.yml, the only workflow that is handed the keys.
+on:
+  workflow_dispatch:
+
+concurrency:
+  # A newer run on the same ref makes an in-flight build irrelevant.
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to the version this has been built and verified with, not "latest",
+  # so an unrelated Flutter release is not a surprise CI failure.
+  FLUTTER_VERSION: '3.47.0'
+
+jobs:
+  check:
+    name: Analyse and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  android:
+    name: Android APK
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+
+      # One APK per ABI (small, for a real phone) and one universal APK
+      # (for an emulator or when the ABI is unknown).
+      - run: flutter build apk --release --split-per-abi
+      - run: flutter build apk --release
+
+      - name: Check the APKs are present
+        run: |
+          cd build/app/outputs/flutter-apk
+          for apk in app-release.apk app-arm64-v8a-release.apk \
+                     app-armeabi-v7a-release.apk app-x86_64-release.apk; do
+            test -f "$apk" || { echo "missing $apk"; exit 1; }
+            echo "$apk  $(du -h "$apk" | cut -f1)"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/*-release.apk
+          if-no-files-found: error
+          retention-days: 14
