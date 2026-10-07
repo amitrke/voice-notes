@@ -5,6 +5,7 @@ import '../providers/ai_provider.dart';
 import '../providers/gemini_provider.dart';
 import '../providers/openai_provider.dart';
 import '../providers/sarvam_provider.dart';
+import 'text_scale.dart';
 
 class ModelDefaults {
   final String stt;
@@ -31,6 +32,7 @@ class SettingsStore {
   ProviderId active = ProviderId.sarvam;
   bool translate = true;
   bool autoSummary = true;
+  double textScale = defaultTextScale;
 
   Future<void> load() async {
     _prefs = await SharedPreferences.getInstance();
@@ -40,6 +42,7 @@ class SettingsStore {
     );
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
+    textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     for (final id in ProviderId.values) {
       final k = await _secure.read(key: 'apikey_${id.name}');
       if (k != null && k.isNotEmpty) _keys[id] = k;
@@ -88,6 +91,11 @@ class SettingsStore {
   Future<void> setTranslate(bool v) async {
     translate = v;
     await _prefs.setBool('translate', v);
+  }
+
+  Future<void> setTextScale(double v) async {
+    textScale = snapTextScale(v);
+    await _prefs.setDouble('textScale', textScale);
   }
 
   Future<void> setAutoSummary(bool v) async {

@@ -32,6 +32,13 @@ class AppState extends ChangeNotifier {
   bool get hasAnyNotes => _notes.isNotEmpty;
   bool get hasActiveKey => settings.hasKey(settings.active);
 
+  double get textScale => settings.textScale;
+
+  Future<void> setTextScale(double v) async {
+    await settings.setTextScale(v);
+    notifyListeners();
+  }
+
   /// Lets screens that edit [settings] directly trigger a rebuild.
   void refresh() => notifyListeners();
 

@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../data/app_state.dart';
 import '../models/note.dart';
 import 'format.dart';
+import 'text_size.dart';
 
 class NotePage extends StatefulWidget {
   final int noteId;
@@ -66,6 +67,15 @@ class _NotePageState extends State<NotePage> {
             ? note.title
             : 'Note'),
         actions: [
+          IconButton(
+            tooltip: 'Text size',
+            icon: const Icon(Icons.format_size),
+            onPressed: () => showTextSizeSheet(
+              context,
+              current: () => state.textScale,
+              onChanged: state.setTextScale,
+            ),
+          ),
           PopupMenuButton<String>(
             onSelected: (v) async {
               if (v == 'delete') {

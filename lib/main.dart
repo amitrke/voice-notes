@@ -22,9 +22,22 @@ class VoiceNotesApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final userScale = context.select<AppState, double>((s) => s.textScale);
     return MaterialApp(
       title: 'Voice Notes',
       debugShowCheckedModeBanner: false,
+      // The user's choice stacks on the system font size, with an upper bound
+      // so layouts stay usable.
+      builder: (context, child) {
+        final media = MediaQuery.of(context);
+        final system = media.textScaler.scale(1.0);
+        return MediaQuery(
+          data: media.copyWith(
+            textScaler: TextScaler.linear((system * userScale).clamp(0.5, 3.0)),
+          ),
+          child: child!,
+        );
+      },
       theme: ThemeData(
         colorSchemeSeed: Colors.indigo,
         useMaterial3: true,

@@ -6,6 +6,7 @@ import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
 import 'links.dart';
+import 'text_size.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -73,6 +74,15 @@ class _SettingsPageState extends State<SettingsPage> {
               setState(() {});
               state.refresh();
             },
+          ),
+          const Divider(),
+          const _Header('Text size'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextSizeControl(
+              value: state.textScale,
+              onChanged: state.setTextScale,
+            ),
           ),
           const Divider(),
           const _Header('Behaviour'),
