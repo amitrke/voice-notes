@@ -1,55 +1,29 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
 import '../models/note.dart';
-import '../services/recorder_service.dart';
+import 'audio_input.dart';
 import 'format.dart';
 import 'note_page.dart';
-import 'record_sheet.dart';
 import 'settings_page.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
-  Future<void> _record(BuildContext context) async {
-    final state = context.read<AppState>();
-    final result = await showModalBottomSheet<RecordingResult>(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      builder: (_) =>
-          RecordSheet(format: state.settings.active.recordingFormat),
-    );
-    if (result != null) {
-      await state.addAudio(result.path, durationMs: result.durationMs);
-    }
-  }
-
-  Future<void> _import(BuildContext context) async {
-    final state = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    final picked = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: const [
-        'm4a', 'mp3', 'wav', 'aac', 'ogg', 'opus', 'flac', 'mp4', 'amr', 'webm'
-      ],
-    );
-    final path = picked?.path;
-    if (path == null) return;
-    try {
-      final stored = await state.importFile(path);
-      await state.addAudio(stored);
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Could not import: $e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final notes = state.notes;
+    final usualLanguage = _usualLanguage(notes);
+    // Notes arrive newest first; a heading goes before each new day.
+    final rows = <Object>[];
+    String? lastDay;
+    for (final n in notes) {
+      final day = dayLabel(n.createdAt);
+      if (day != lastDay) rows.add(lastDay = day);
+      rows.add(n);
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Voice Notes'),
@@ -57,7 +31,7 @@ class HomePage extends StatelessWidget {
           IconButton(
             tooltip: 'Import audio',
             icon: const Icon(Icons.upload_file),
-            onPressed: () => _import(context),
+            onPressed: () => importAudio(context),
           ),
           IconButton(
             tooltip: 'Settings',
@@ -68,7 +42,7 @@ class HomePage extends StatelessWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _record(context),
+        onPressed: () => recordAudio(context),
         icon: const Icon(Icons.mic),
         label: const Text('Record'),
       ),
@@ -90,12 +64,46 @@ class HomePage extends StatelessWidget {
                 ? _Empty(searching: state.hasAnyNotes)
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 96),
-                    itemCount: notes.length,
-                    itemBuilder: (_, i) => _NoteTile(note: notes[i]),
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => switch (rows[i]) {
+                      final Note n => _NoteTile(
+                          note: n,
+                          showLanguage: languageLabel(n.languageCode) !=
+                              usualLanguage),
+                      final String day => _DayHeader(day),
+                      _ => const SizedBox.shrink(),
+                    },
                   ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The language most notes are in, so the list only calls out the others.
+String? _usualLanguage(List<Note> notes) {
+  final counts = <String, int>{};
+  for (final n in notes) {
+    final l = languageLabel(n.languageCode);
+    if (l != null) counts[l] = (counts[l] ?? 0) + 1;
+  }
+  if (counts.isEmpty) return null;
+  return counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+}
+
+class _DayHeader extends StatelessWidget {
+  final String text;
+  const _DayHeader(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(text,
+          style: theme.textTheme.labelLarge
+              ?.copyWith(color: theme.colorScheme.primary)),
     );
   }
 }
@@ -143,12 +151,14 @@ class _Empty extends StatelessWidget {
 
 class _NoteTile extends StatelessWidget {
   final Note note;
-  const _NoteTile({required this.note});
+  final bool showLanguage;
+  const _NoteTile({required this.note, required this.showLanguage});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final lang = languageLabel(note.languageCode);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final lang = showLanguage ? languageLabel(note.languageCode) : null;
     final title = switch (note.status) {
       NoteStatus.processing => 'Transcribing…',
       NoteStatus.failed => 'Transcription failed',
@@ -162,31 +172,33 @@ class _NoteTile extends StatelessWidget {
     return ListTile(
       onTap: () => Navigator.push(
           context, MaterialPageRoute(builder: (_) => NotePage(noteId: note.id!))),
-      leading: switch (note.status) {
+      // Status sits at the end so titles line up whether or not it shows.
+      trailing: switch (note.status) {
         NoteStatus.processing => const SizedBox(
-            width: 24,
-            height: 24,
+            width: 20,
+            height: 20,
             child: CircularProgressIndicator(strokeWidth: 2.5)),
         NoteStatus.failed => Icon(Icons.error_outline, color: scheme.error),
-        NoteStatus.done => const Icon(Icons.graphic_eq),
+        NoteStatus.done => null,
       },
-      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w600)),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (body.isNotEmpty)
             Text(body, maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 2),
+          const SizedBox(height: 4),
           Text(
             [
-              formatDate(note.createdAt),
-              ?lang,
+              formatTime(note.createdAt),
               if (note.durationMs != null) formatDuration(note.durationMs!),
+              ?lang,
             ].join(' · '),
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(color: scheme.outline),
           ),
         ],
       ),

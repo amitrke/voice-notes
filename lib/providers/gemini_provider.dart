@@ -20,8 +20,8 @@ class GeminiProvider implements AiProvider {
 
   GeminiProvider({
     required this.apiKey,
-    this.sttModel = 'gemini-2.5-flash',
-    this.textModel = 'gemini-2.5-flash',
+    this.sttModel = 'gemini-3.5-flash',
+    this.textModel = 'gemini-3.5-flash',
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -105,10 +105,11 @@ class GeminiProvider implements AiProvider {
   }
 
   @override
-  Future<NoteSummary> summarize(String text) async {
-    final reply = await _generate(textModel, [
-      {'text': '$summaryPrompt$text'},
-    ]);
-    return summaryFromReply(reply);
-  }
+  Future<NoteSummary> summarize(String text) async =>
+      summaryFromReply(await completeJson('$summaryPrompt$text'));
+
+  @override
+  Future<String> completeJson(String prompt) => _generate(textModel, [
+        {'text': prompt},
+      ]);
 }

@@ -50,7 +50,30 @@ class _RecordSheetState extends State<RecordSheet> {
     if (mounted) Navigator.pop(context, result);
   }
 
+  /// Recordings shorter than this are discarded without asking.
+  static const _confirmAfter = Duration(seconds: 5);
+
   Future<void> _cancel() async {
+    if (_recording && _clock.elapsed >= _confirmAfter) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard this recording?'),
+          content: Text(
+              'The ${formatDuration(_clock.elapsedMilliseconds)} you have '
+              'recorded will be lost.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Keep recording')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Discard')),
+          ],
+        ),
+      );
+      if (discard != true || !mounted) return;
+    }
     _ticker?.cancel();
     if (_recording) await _recorder.cancel();
     if (mounted) Navigator.pop(context);
