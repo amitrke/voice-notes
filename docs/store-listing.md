@@ -99,7 +99,7 @@ A simple, no-frills tool for turning speech into searchable text, in the languag
 
 **Primary category:** Productivity. **Secondary:** Utilities.
 
-**Support URL:** [SUPPORT URL]  **Privacy policy URL:** [PRIVACY POLICY URL]
+**Support URL:** https://github.com/amitrke/voice-notes/issues  **Privacy policy URL:** https://amitrke.github.io/voice-notes/privacy/
 
 ### App Review notes (important)
 
