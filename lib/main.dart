@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -38,16 +39,35 @@ class VoiceNotesApp extends StatelessWidget {
           child: child!,
         );
       },
-      theme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
+      theme: _theme(Brightness.light),
+      darkTheme: _theme(Brightness.dark),
       home: const HomePage(),
     );
   }
+}
+
+ThemeData _theme(Brightness brightness) {
+  final base = ThemeData(
+    colorSchemeSeed: Colors.indigo,
+    brightness: brightness,
+    useMaterial3: true,
+  );
+  // Material 3's letter spacing is tuned for Roboto and looks loose in
+  // Apple's system font.
+  if (defaultTargetPlatform != TargetPlatform.iOS) return base;
+  TextStyle? tight(TextStyle? s) => s?.copyWith(letterSpacing: 0);
+  final t = base.textTheme;
+  return base.copyWith(
+    textTheme: t.copyWith(
+      titleLarge: tight(t.titleLarge),
+      titleMedium: tight(t.titleMedium),
+      titleSmall: tight(t.titleSmall),
+      bodyLarge: tight(t.bodyLarge),
+      bodyMedium: tight(t.bodyMedium),
+      bodySmall: tight(t.bodySmall),
+      labelLarge: tight(t.labelLarge),
+      labelMedium: tight(t.labelMedium),
+      labelSmall: tight(t.labelSmall),
+    ),
+  );
 }

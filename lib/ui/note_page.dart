@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import '../data/app_state.dart';
 import '../data/clinical_export.dart';
 import '../models/note.dart';
+import '../providers/ai_provider.dart';
 import 'audio_input.dart';
 import 'format.dart';
 import 'text_size.dart';
@@ -96,6 +97,25 @@ class _NotePageState extends State<NotePage> {
     }
   }
 
+  /// Shares the title, summary and the transcript currently on screen.
+  Future<void> _share(BuildContext buttonContext, Note note, String text) {
+    final title = note.title.trim();
+    final summary = note.summary.trim();
+    final body = [
+      if (title.isNotEmpty) title,
+      if (summary.isNotEmpty) 'Summary\n$summary',
+      if (text.trim().isNotEmpty) text.trim(),
+    ].join('\n\n');
+    // iPad shows the share sheet as a popover anchored to the button.
+    final box = buttonContext.findRenderObject() as RenderBox?;
+    return SharePlus.instance.share(ShareParams(
+      text: body,
+      subject: title.isEmpty ? null : title,
+      sharePositionOrigin:
+          box == null ? null : box.localToGlobal(Offset.zero) & box.size,
+    ));
+  }
+
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context)
@@ -108,7 +128,11 @@ class _NotePageState extends State<NotePage> {
     final note = state.byId(widget.noteId);
     if (note == null) return const Scaffold(body: SizedBox.shrink());
 
-    final hasEnglish = note.english.trim().isNotEmpty;
+    // An English recording has nothing to translate, though some providers
+    // still return an "English version" of it.
+    final hasEnglish = note.english.trim().isNotEmpty &&
+        !isEnglish(note.languageCode) &&
+        note.english.trim() != note.transcript.trim();
     final showEnglish = _showEnglish && hasEnglish;
     final text = showEnglish ? note.english : note.transcript;
     final lang = languageLabel(note.languageCode);
@@ -119,6 +143,16 @@ class _NotePageState extends State<NotePage> {
             ? note.title
             : 'Note'),
         actions: [
+          if (text.trim().isNotEmpty || note.summary.isNotEmpty)
+            Builder(
+              builder: (buttonContext) => IconButton(
+                tooltip: 'Share',
+                icon: Icon(Theme.of(context).platform == TargetPlatform.iOS
+                    ? Icons.ios_share
+                    : Icons.share_outlined),
+                onPressed: () => _share(buttonContext, note, text),
+              ),
+            ),
           IconButton(
             tooltip: 'Text size',
             icon: const Icon(Icons.format_size),
@@ -159,7 +193,8 @@ class _NotePageState extends State<NotePage> {
             [
               formatDate(note.createdAt),
               ?lang,
-              note.provider,
+              ProviderId.values.asNameMap()[note.provider]?.label ??
+                  note.provider,
             ].join(' · '),
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -462,7 +497,7 @@ class _SegmentTile extends StatelessWidget {
                 onPressed: onDelete,
               ),
             ]),
-          _AudioBar(path: seg.audioPath),
+          _AudioBar(path: seg.audioPath, knownDurationMs: seg.durationMs),
           if (seg.status == NoteStatus.processing)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
@@ -499,7 +534,11 @@ class _SegmentTile extends StatelessWidget {
 
 class _AudioBar extends StatefulWidget {
   final String path;
-  const _AudioBar({required this.path});
+
+  /// Length recorded when the audio was captured, shown until the player
+  /// has loaded the file and reports its own.
+  final int? knownDurationMs;
+  const _AudioBar({required this.path, this.knownDurationMs});
 
   @override
   State<_AudioBar> createState() => _AudioBarState();
@@ -520,7 +559,12 @@ class _AudioBarState extends State<_AudioBar> {
     _subs
       ..add(_player.onPlayerStateChanged.listen((s) => setState(() => _state = s)))
       ..add(_player.onPositionChanged.listen((d) => setState(() => _pos = d)))
-      ..add(_player.onDurationChanged.listen((d) => setState(() => _dur = d)));
+      ..add(_player.onDurationChanged.listen((d) => setState(() => _dur = d)))
+      ..add(_player.onPlayerComplete
+          .listen((_) => setState(() => _pos = Duration.zero)));
+    // Loading the file up front gives the length (imports don't record one)
+    // and lets the slider seek before the first play.
+    if (!_missing) _player.setSource(DeviceFileSource(widget.path));
   }
 
   @override
@@ -547,6 +591,8 @@ class _AudioBarState extends State<_AudioBar> {
     if (_missing) return const Text('Audio file is no longer available.');
     final playing = _state == PlayerState.playing;
     final maxMs = _dur.inMilliseconds.toDouble();
+    final totalMs =
+        _dur > Duration.zero ? _dur.inMilliseconds : widget.knownDurationMs;
     return Row(
       children: [
         IconButton.filledTonal(
@@ -562,7 +608,14 @@ class _AudioBarState extends State<_AudioBar> {
                 : (v) => _player.seek(Duration(milliseconds: v.toInt())),
           ),
         ),
-        Text(formatDuration(_dur.inMilliseconds)),
+        Text(
+          [
+            // Always shown, so the label keeps its width when play starts.
+            formatDuration(_pos.inMilliseconds),
+            if (totalMs != null) formatDuration(totalMs),
+          ].join(' / '),
+          style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
+        ),
       ],
     );
   }
