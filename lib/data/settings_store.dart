@@ -4,7 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/ai_provider.dart';
 import '../providers/gemini_provider.dart';
 import '../providers/openai_provider.dart';
+import '../providers/openrouter_provider.dart';
 import '../providers/sarvam_provider.dart';
+import '../services/audio_converter.dart';
 import 'text_scale.dart';
 
 class ModelDefaults {
@@ -14,9 +16,10 @@ class ModelDefaults {
 }
 
 const modelDefaults = {
-  ProviderId.sarvam: ModelDefaults('saaras:v3', 'sarvam-m'),
+  ProviderId.sarvam: ModelDefaults('saaras:v3', 'sarvam-105b'),
   ProviderId.openai: ModelDefaults('whisper-1', 'gpt-4o-mini'),
-  ProviderId.gemini: ModelDefaults('gemini-2.5-flash', 'gemini-2.5-flash'),
+  ProviderId.gemini: ModelDefaults('gemini-3.5-flash', 'gemini-3.5-flash'),
+  ProviderId.openrouter: ModelDefaults('', 'openrouter/free'),
 };
 
 /// API keys live in the platform keystore/keychain; everything else in
@@ -29,9 +32,15 @@ class SettingsStore {
   SettingsStore({FlutterSecureStorage? secure})
       : _secure = secure ?? const FlutterSecureStorage();
 
+  /// Provider that transcribes audio.
   ProviderId active = ProviderId.sarvam;
+
+  /// Provider for text work (titles, summaries, clinical notes). Null means
+  /// the same one as [active].
+  ProviderId? enrichment;
   bool translate = true;
   bool autoSummary = true;
+  bool clinical = false;
   double textScale = defaultTextScale;
 
   Future<void> load() async {
@@ -40,8 +49,11 @@ class SettingsStore {
       (p) => p.name == _prefs.getString('active'),
       orElse: () => ProviderId.sarvam,
     );
+    final e = _prefs.getString('enrichment');
+    enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
+    clinical = _prefs.getBool('clinical') ?? false;
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     for (final id in ProviderId.values) {
       final k = await _secure.read(key: 'apikey_${id.name}');
@@ -83,6 +95,18 @@ class SettingsStore {
     await put('text_${id.name}', text, modelDefaults[id]!.text);
   }
 
+  /// The provider used for text work.
+  ProviderId get textActive => enrichment ?? active;
+
+  Future<void> setEnrichment(ProviderId? id) async {
+    enrichment = id;
+    if (id == null) {
+      await _prefs.remove('enrichment');
+    } else {
+      await _prefs.setString('enrichment', id.name);
+    }
+  }
+
   Future<void> setActive(ProviderId id) async {
     active = id;
     await _prefs.setString('active', id.name);
@@ -98,6 +122,11 @@ class SettingsStore {
     await _prefs.setDouble('textScale', textScale);
   }
 
+  Future<void> setClinical(bool v) async {
+    clinical = v;
+    await _prefs.setBool('clinical', v);
+  }
+
   Future<void> setAutoSummary(bool v) async {
     autoSummary = v;
     await _prefs.setBool('autoSummary', v);
@@ -110,13 +139,19 @@ class SettingsStore {
     switch (id) {
       case ProviderId.sarvam:
         return SarvamProvider(
-            apiKey: key, sttModel: sttModel(id), textModel: textModel(id));
+          apiKey: key,
+          sttModel: sttModel(id),
+          textModel: textModel(id),
+          toWav: convertToWav16kMono,
+        );
       case ProviderId.openai:
         return OpenAiProvider(
             apiKey: key, sttModel: sttModel(id), textModel: textModel(id));
       case ProviderId.gemini:
         return GeminiProvider(
             apiKey: key, sttModel: sttModel(id), textModel: textModel(id));
+      case ProviderId.openrouter:
+        return OpenRouterProvider(apiKey: key, textModel: textModel(id));
     }
   }
 }
