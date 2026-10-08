@@ -27,13 +27,20 @@ String clinicalReportText(Note note) {
   final b = StringBuffer()
     ..writeln(_bar)
     ..writeln('              CLINICAL SCRIBE')
-    ..writeln(_bar)
+    ..writeln(_bar);
+  if (note.isStale) {
+    b
+      ..writeln()
+      ..writeln('!! OUT OF DATE: recordings changed after this clinical note')
+      ..writeln('!! was written. Regenerate it before relying on it.');
+  }
+  b
     ..writeln()
     ..writeln('LANGUAGE')
     ..writeln(lang ?? 'Unknown')
     ..writeln()
     ..writeln('AUDIO')
-    ..writeln(p.basename(note.audioPath))
+    ..writeln(note.segments.map((s) => p.basename(s.audioPath)).join('\n'))
     ..writeln()
     ..writeln('DATE')
     ..writeln(formatDate(note.createdAt));
