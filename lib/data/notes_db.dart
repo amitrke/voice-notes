@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import '../models/note.dart';
 
 const _segmentsTable = '''
-  CREATE TABLE segments (
+  CREATE TABLE IF NOT EXISTS segments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     note_id INTEGER NOT NULL,
     position INTEGER NOT NULL,
@@ -55,9 +55,7 @@ class NotesDb {
           await db.execute(_segmentsTable);
         },
         onUpgrade: (db, from, _) async {
-          if (from < 2) {
-            await db.execute('ALTER TABLE notes ADD COLUMN clinical TEXT');
-          }
+          if (from < 2) await _addColumn(db, 'clinical');
           if (from < 3) await _toSegments(db);
         },
       ),
@@ -65,16 +63,24 @@ class NotesDb {
     return NotesDb._(db);
   }
 
+  /// Adds a TEXT column to notes unless a half-migrated database already has it.
+  static Future<void> _addColumn(Database db, String name) async {
+    final cols = await db.rawQuery('PRAGMA table_info(notes)');
+    if (cols.any((c) => c['name'] == name)) return;
+    await db.execute('ALTER TABLE notes ADD COLUMN $name TEXT');
+  }
+
   /// v3: every existing note becomes a note with one recording, and its
   /// current title/summary/clinical note count as up to date.
   static Future<void> _toSegments(Database db) async {
-    await db.execute('ALTER TABLE notes ADD COLUMN enriched_hash TEXT');
+    await _addColumn(db, 'enriched_hash');
     await db.execute(_segmentsTable);
     await db.execute('''
       INSERT INTO segments (note_id, position, audio_path, transcript, english,
                             language_code, status, error, duration_ms)
       SELECT id, 0, audio_path, transcript, english, language_code, status,
-             error, duration_ms FROM notes''');
+             error, duration_ms FROM notes
+      WHERE id NOT IN (SELECT note_id FROM segments)''');
     final rows = await db.query('notes',
         columns: ['id', 'transcript', 'english', 'summary', 'clinical']);
     for (final r in rows) {

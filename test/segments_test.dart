@@ -93,6 +93,26 @@ void main() {
   }
 
   group('migration', () {
+    test('tolerates a v1 database that already has the v2 clinical column',
+        () async {
+      final path = p.join(tmp.path, 'half.db');
+      final old = await ffi.openDatabase(path,
+          options: OpenDatabaseOptions(
+              version: 1, onCreate: (db, _) => db.execute(_v2Notes)));
+      await old.insert('notes', {
+        'provider': 'gemini',
+        'created_at': 1000,
+        'status': 'done',
+        'audio_path': '/a/one.m4a',
+      });
+      await old.close();
+
+      final db = await NotesDb.open(path: path, factory: ffi);
+      final notes = await db.all();
+      expect(notes.single.segments, hasLength(1));
+      await db.close();
+    });
+
     test('turns each existing note into a note with one recording', () async {
       final path = p.join(tmp.path, 'old.db');
       final old = await ffi.openDatabase(path,
