@@ -45,6 +45,13 @@ class RecorderService {
         path, DateTime.now().difference(started).inMilliseconds);
   }
 
+  /// Input level from 0 (silence) to 1 (loud), sampled every [interval].
+  Stream<double> levels(
+          {Duration interval = const Duration(milliseconds: 100)}) =>
+      _rec
+          .onAmplitudeChanged(interval)
+          .map((a) => ((a.current + 50) / 50).clamp(0.0, 1.0));
+
   Future<void> cancel() async {
     _startedAt = null;
     await _rec.cancel();

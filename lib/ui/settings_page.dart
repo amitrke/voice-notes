@@ -7,6 +7,7 @@ import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
 import 'links.dart';
 import 'text_size.dart';
+import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -33,125 +34,154 @@ class _SettingsPageState extends State<SettingsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 32),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
         children: [
-          const _Header('Transcription provider'),
-          RadioGroup<ProviderId>(
-            groupValue: s.active,
-            onChanged: (v) async {
-              if (v == null) return;
-              await s.setActive(v);
-              setState(() {});
-              state.refresh();
-            },
+          const _Header('Transcription'),
+          Card(
             child: Column(
               children: [
-                for (final id in ProviderId.values.where((p) => p.canTranscribe))
-                  RadioListTile<ProviderId>(
-                    value: id,
-                    title: Text(id.label),
-                    subtitle: Text(
-                        '${id.blurb}${s.hasKey(id) ? '' : ' · no key yet'}'),
+                RadioGroup<ProviderId>(
+                  groupValue: s.active,
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    await s.setActive(v);
+                    setState(() {});
+                    state.refresh();
+                  },
+                  child: Column(
+                    children: [
+                      for (final id
+                          in ProviderId.values.where((p) => p.canTranscribe))
+                        RadioListTile<ProviderId>(
+                          value: id,
+                          title: Text(id.label,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle: Text(id.blurb),
+                          secondary: _KeyStatus(saved: s.hasKey(id)),
+                        ),
+                    ],
                   ),
+                ),
+                const Divider(),
+                _KeyEditor(
+                  key: ValueKey(
+                      'editor_${s.active.name}_${s.textActive == s.active}'),
+                  id: s.active,
+                  store: s,
+                  showText: s.textActive == s.active,
+                  onSaved: () {
+                    setState(() {});
+                    state.refresh();
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.help_outline),
+                  title: const Text('How to get an API key'),
+                  subtitle: const Text(
+                      'Step-by-step guides for Sarvam, OpenAI and Gemini. '
+                      'As of October 2026, Gemini has a free tier.'),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => _openGuide(context),
+                ),
               ],
             ),
           ),
-          ListTile(
-            leading: const Icon(Icons.help_outline),
-            title: const Text('How to get an API key'),
-            subtitle: const Text(
-                'Step-by-step guides for Sarvam, OpenAI and Gemini. '
-                'As of October 2026, Gemini has a free tier.'),
-            trailing: const Icon(Icons.open_in_new, size: 18),
-            onTap: () => _openGuide(context),
-          ),
-          const Divider(),
-          _KeyEditor(
-            key: ValueKey('editor_${s.active.name}_${s.textActive == s.active}'),
-            id: s.active,
-            store: s,
-            showText: s.textActive == s.active,
-            onSaved: () {
-              setState(() {});
-              state.refresh();
-            },
-          ),
-          const Divider(),
-          const _Header('Enrichment'),
-          SwitchListTile(
-            title: const Text('Use a different provider for text'),
-            subtitle: const Text(
-                'Titles, summaries and clinical notes can use another '
-                'provider, such as a free OpenRouter model, instead of the '
-                'transcription provider.'),
-            value: s.enrichment != null,
-            onChanged: (v) async {
-              await s.setEnrichment(v ? ProviderId.openrouter : null);
-              setState(() {});
-              state.refresh();
-            },
-          ),
-          if (s.enrichment != null) ...[
-            RadioGroup<ProviderId>(
-              groupValue: s.enrichment,
-              onChanged: (v) async {
-                if (v == null) return;
-                await s.setEnrichment(v);
-                setState(() {});
-                state.refresh();
-              },
-              child: Column(
-                children: [
-                  for (final id in ProviderId.values)
-                    RadioListTile<ProviderId>(
-                      value: id,
-                      title: Text(id.label),
-                      subtitle: Text(s.hasKey(id) ? 'Key saved' : 'No key yet'),
+          const _Header('After transcribing'),
+          Card(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Translate to English'),
+                  subtitle: const Text(
+                      'Also produce an English version. Costs an extra request per recording.'),
+                  value: s.translate,
+                  onChanged: (v) async {
+                    await s.setTranslate(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Title and summary'),
+                  subtitle: const Text(
+                      'Uses your provider\'s text model to name each note.'),
+                  value: s.autoSummary,
+                  onChanged: (v) async {
+                    await s.setAutoSummary(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Use a different provider for text'),
+                  subtitle: const Text(
+                      'Titles, summaries and clinical notes can use another '
+                      'provider, such as a free OpenRouter model, instead of the '
+                      'transcription provider.'),
+                  value: s.enrichment != null,
+                  onChanged: (v) async {
+                    await s.setEnrichment(v ? ProviderId.openrouter : null);
+                    setState(() {});
+                    state.refresh();
+                  },
+                ),
+                if (s.enrichment != null) ...[
+                  const Divider(),
+                  RadioGroup<ProviderId>(
+                    groupValue: s.enrichment,
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      await s.setEnrichment(v);
+                      setState(() {});
+                      state.refresh();
+                    },
+                    child: Column(
+                      children: [
+                        for (final id in ProviderId.values)
+                          RadioListTile<ProviderId>(
+                            value: id,
+                            title: Text(id.label),
+                            secondary: _KeyStatus(saved: s.hasKey(id)),
+                          ),
+                      ],
                     ),
+                  ),
+                  if (s.enrichment != s.active) ...[
+                    const Divider(),
+                    _KeyEditor(
+                      key: ValueKey('editor_text_${s.enrichment!.name}'),
+                      id: s.enrichment!,
+                      store: s,
+                      showStt: false,
+                      onSaved: () {
+                        setState(() {});
+                        state.refresh();
+                      },
+                    ),
+                  ],
                 ],
-              ),
-            ),
-            if (s.enrichment != s.active)
-              _KeyEditor(
-                key: ValueKey('editor_text_${s.enrichment!.name}'),
-                id: s.enrichment!,
-                store: s,
-                showStt: false,
-                onSaved: () {
-                  setState(() {});
-                  state.refresh();
-                },
-              ),
-          ],
-          const Divider(),
-          const _Header('Text size'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextSizeControl(
-              value: state.textScale,
-              onChanged: state.setTextScale,
+              ],
             ),
           ),
-          const Divider(),
           const _Header('I use this for'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('General notes')),
-                ButtonSegment(value: true, label: Text('Clinical work')),
-              ],
-              selected: {s.clinical},
-              onSelectionChanged: (v) async {
-                await s.setClinical(v.first);
-                setState(() {});
-                state.refresh();
-              },
-            ),
+          SegmentedButton<bool>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: false, label: Text('General notes')),
+              ButtonSegment(value: true, label: Text('Clinical work')),
+            ],
+            selected: {s.clinical},
+            onSelectionChanged: (v) async {
+              await s.setClinical(v.first);
+              setState(() {});
+              state.refresh();
+            },
           ),
           if (s.clinical)
             const Padding(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: EdgeInsets.fromLTRB(4, 12, 4, 0),
               child: Text(
                 'Adds a "Create clinical note" option to each transcript: an '
                 'interpretation, a formatted note in English and the spoken '
@@ -161,37 +191,59 @@ class _SettingsPageState extends State<SettingsPage> {
                 'not leave your organisation.',
               ),
             ),
-          const Divider(),
-          const _Header('Behaviour'),
-          SwitchListTile(
-            title: const Text('Translate to English'),
-            subtitle: const Text(
-                'Also produce an English version. Costs an extra request per recording.'),
-            value: s.translate,
-            onChanged: (v) async {
-              await s.setTranslate(v);
-              setState(() {});
-            },
+          const _Header('Text size'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextSizeControl(
+                value: state.textScale,
+                onChanged: state.setTextScale,
+              ),
+            ),
           ),
-          SwitchListTile(
-            title: const Text('Title and summary'),
-            subtitle: const Text(
-                'Uses your provider\'s text model to name each note.'),
-            value: s.autoSummary,
-            onChanged: (v) async {
-              await s.setAutoSummary(v);
-              setState(() {});
-            },
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 24, 16, 0),
-            child: Text(
-              'Your API keys are stored in this device\'s secure storage and '
-              'are only sent to the provider you choose. Audio is uploaded to '
-              'that provider for transcription; nothing goes to any other server.',
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 24, 4, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lock_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Your API keys are stored in this device\'s secure storage and '
+                    'are only sent to the provider you choose. Audio is uploaded to '
+                    'that provider for transcription; nothing goes to any other server.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        height: 1.5),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Key saved" or "No key" beside a provider.
+class _KeyStatus extends StatelessWidget {
+  final bool saved;
+  const _KeyStatus({required this.saved});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Text(
+      saved ? 'Key saved' : 'No key',
+      style: theme.textTheme.labelMedium?.copyWith(
+        fontWeight: FontWeight.w600,
+        color: saved
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant,
       ),
     );
   }
@@ -202,10 +254,8 @@ class _Header extends StatelessWidget {
   const _Header(this.text);
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-        child: Text(text, style: Theme.of(context).textTheme.titleSmall),
-      );
+  Widget build(BuildContext context) =>
+      SectionLabel(text, padding: const EdgeInsets.fromLTRB(4, 24, 4, 8));
 }
 
 class _KeyEditor extends StatefulWidget {

@@ -4,17 +4,19 @@ import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
 import '../services/recorder_service.dart';
-import 'record_sheet.dart';
+import 'record_screen.dart';
 
 /// Records audio and adds it as a new note, or, when [noteId] is given, as
 /// another recording on that note.
 Future<void> recordAudio(BuildContext context, {int? noteId}) async {
   final state = context.read<AppState>();
-  final result = await showModalBottomSheet<RecordingResult>(
-    context: context,
-    isDismissible: false,
-    enableDrag: false,
-    builder: (_) => RecordSheet(format: state.settings.active.recordingFormat),
+  final result = await Navigator.push<RecordingResult>(
+    context,
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) =>
+          RecordScreen(format: state.settings.active.recordingFormat),
+    ),
   );
   if (result == null) return;
   if (noteId == null) {
