@@ -49,6 +49,7 @@ class OpenAiProvider implements AiProvider {
       text: (original['text'] ?? '').toString(),
       english: english,
       languageCode: original['language'] as String?,
+      lines: timedLines(original['segments']),
     );
   }
 
@@ -86,4 +87,18 @@ class OpenAiProvider implements AiProvider {
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     return (j['choices'] as List).first['message']['content'] as String;
   }
+}
+
+/// Whisper's verbose_json segments (times in seconds) as [TimedLine]s.
+List<TimedLine> timedLines(Object? segments) {
+  if (segments is! List) return const [];
+  final lines = <TimedLine>[];
+  for (final seg in segments) {
+    if (seg is! Map) continue;
+    final start = seg['start'], end = seg['end'];
+    final text = (seg['text'] ?? '').toString().trim();
+    if (start is! num || end is! num || text.isEmpty) continue;
+    lines.add(TimedLine((start * 1000).round(), (end * 1000).round(), text));
+  }
+  return lines;
 }

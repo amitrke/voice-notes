@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
+import '../services/model_store.dart';
 import 'links.dart';
 import 'text_size.dart';
 import 'theme.dart';
@@ -58,23 +59,37 @@ class _SettingsPageState extends State<SettingsPage> {
                               style:
                                   const TextStyle(fontWeight: FontWeight.w600)),
                           subtitle: Text(id.blurb),
-                          secondary: _KeyStatus(saved: s.hasKey(id)),
+                          secondary: id.needsKey
+                              ? _KeyStatus(saved: s.hasKey(id))
+                              : _KeyStatus(
+                                  saved: s.isReady(id),
+                                  yes: 'Model ready',
+                                  no: 'No model'),
                         ),
                     ],
                   ),
                 ),
                 const Divider(),
-                _KeyEditor(
-                  key: ValueKey(
-                      'editor_${s.active.name}_${s.textActive == s.active}'),
-                  id: s.active,
-                  store: s,
-                  showText: s.textActive == s.active,
-                  onSaved: () {
-                    setState(() {});
-                    state.refresh();
-                  },
-                ),
+                if (s.active == ProviderId.onDevice)
+                  _OfflineModels(
+                    store: s,
+                    onChanged: () {
+                      setState(() {});
+                      state.refresh();
+                    },
+                  )
+                else
+                  _KeyEditor(
+                    key: ValueKey(
+                        'editor_${s.active.name}_${s.textActive == s.active}'),
+                    id: s.active,
+                    store: s,
+                    showText: s.textActive == s.active,
+                    onSaved: () {
+                      setState(() {});
+                      state.refresh();
+                    },
+                  ),
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.help_outline),
@@ -105,8 +120,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 const Divider(),
                 SwitchListTile(
                   title: const Text('Title and summary'),
-                  subtitle: const Text(
-                      'Uses your provider\'s text model to name each note.'),
+                  subtitle: Text(s.textActive.canText
+                      ? 'Uses your provider\'s text model to name each note.'
+                      : 'On-device transcription has no text model. Turn on '
+                          '"Use a different provider for text" below to get '
+                          'titles and summaries when you are online.'),
                   value: s.autoSummary,
                   onChanged: (v) async {
                     await s.setAutoSummary(v);
@@ -139,7 +157,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     },
                     child: Column(
                       children: [
-                        for (final id in ProviderId.values)
+                        for (final id
+                            in ProviderId.values.where((p) => p.canText))
                           RadioListTile<ProviderId>(
                             value: id,
                             title: Text(id.label),
@@ -214,7 +233,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Text(
                     'Your API keys are stored in this device\'s secure storage and '
                     'are only sent to the provider you choose. Audio is uploaded to '
-                    'that provider for transcription; nothing goes to any other server.',
+                    'that provider for transcription; nothing goes to any other server. '
+                    'With "On this device", audio never leaves your phone.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                         height: 1.5),
@@ -232,13 +252,16 @@ class _SettingsPageState extends State<SettingsPage> {
 /// "Key saved" or "No key" beside a provider.
 class _KeyStatus extends StatelessWidget {
   final bool saved;
-  const _KeyStatus({required this.saved});
+  final String yes;
+  final String no;
+  const _KeyStatus(
+      {required this.saved, this.yes = 'Key saved', this.no = 'No key'});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Text(
-      saved ? 'Key saved' : 'No key',
+      saved ? yes : no,
       style: theme.textTheme.labelMedium?.copyWith(
         fontWeight: FontWeight.w600,
         color: saved
@@ -357,6 +380,207 @@ class _KeyEditorState extends State<_KeyEditor> {
           ],
           const SizedBox(height: 12),
           FilledButton(onPressed: _save, child: const Text('Save')),
+        ],
+      ),
+    );
+  }
+}
+
+String _size(int bytes) {
+  final mb = bytes / (1024 * 1024);
+  return mb >= 1000 ? '${(mb / 1024).toStringAsFixed(1)} GB' : '${mb.round()} MB';
+}
+
+/// Downloads, picks and deletes the Whisper models used offline.
+class _OfflineModels extends StatelessWidget {
+  final SettingsStore store;
+  final VoidCallback onChanged;
+  const _OfflineModels({required this.store, required this.onChanged});
+
+  Future<void> _download(
+      BuildContext context, ModelStore models, String id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final err = await models.download(id);
+    if (err != null) {
+      messenger.showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    if (!models.isInstalled(id)) return; // Cancelled.
+    // The first model downloaded is the one used.
+    if (store.offlineModel == id) await store.setOfflineModel(id);
+    onChanged();
+  }
+
+  Future<void> _delete(
+      BuildContext context, ModelStore models, OfflineModel m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text('Delete the ${m.label} model?'),
+        content: Text(
+            'This frees ${_size(m.size)}. You can download it again later.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await models.delete(m.id);
+    onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final models = context.watch<ModelStore>();
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant, height: 1.4);
+    final selected = store.offlineModel;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Offline model', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Download a model once. After that, transcription works without '
+            'internet and audio stays on your phone. Wi-Fi is recommended. '
+            'Larger models are more accurate but slower. Indian languages '
+            'other than Hindi come out less accurate than with Sarvam.',
+            style: muted,
+          ),
+          const SizedBox(height: 8),
+          for (final m in models.catalog)
+            _ModelRow(
+              model: m,
+              installed: models.isInstalled(m.id),
+              selected: selected == m.id,
+              downloading: models.downloading == m.id,
+              busy: models.downloading != null,
+              progress: models.progress,
+              onSelect: () async {
+                await store.setOfflineModel(m.id);
+                onChanged();
+              },
+              onDownload: () => _download(context, models, m.id),
+              onCancel: models.cancel,
+              onDelete: () => _delete(context, models, m),
+            ),
+          if (store.translate &&
+              models.byId(selected)?.canTranslate == false)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'The Turbo model cannot translate to English, so notes '
+                'transcribed with it have only the original language.',
+                style: muted,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModelRow extends StatelessWidget {
+  final OfflineModel model;
+  final bool installed;
+  final bool selected;
+  final bool downloading;
+
+  /// Some download is running; only one runs at a time.
+  final bool busy;
+  final double progress;
+  final VoidCallback onSelect;
+  final VoidCallback onDownload;
+  final VoidCallback onCancel;
+  final VoidCallback onDelete;
+  const _ModelRow({
+    required this.model,
+    required this.installed,
+    required this.selected,
+    required this.downloading,
+    required this.busy,
+    required this.progress,
+    required this.onSelect,
+    required this.onDownload,
+    required this.onCancel,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final Widget action = downloading
+        ? TextButton(onPressed: onCancel, child: const Text('Cancel'))
+        : installed
+            ? IconButton(
+                tooltip: 'Delete ${model.label}',
+                icon: const Icon(Icons.delete_outline),
+                onPressed: onDelete,
+              )
+            : OutlinedButton(
+                onPressed: busy ? null : onDownload,
+                child: const Text('Download'),
+              );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (installed)
+                IconButton(
+                  tooltip: selected ? 'In use' : 'Use ${model.label}',
+                  onPressed: onSelect,
+                  icon: Icon(
+                    selected
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    color: selected ? scheme.primary : null,
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Icon(Icons.download_for_offline_outlined,
+                      color: scheme.onSurfaceVariant),
+                ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${model.label} · ${_size(model.size)}',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(model.blurb, style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              action,
+            ],
+          ),
+          if (downloading)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(52, 4, 8, 0),
+              child: Row(
+                children: [
+                  Expanded(child: LinearProgressIndicator(value: progress)),
+                  const SizedBox(width: 12),
+                  Text('${(progress * 100).floor()}%',
+                      style: const TextStyle(
+                          fontFeatures: [FontFeature.tabularFigures()])),
+                ],
+              ),
+            ),
         ],
       ),
     );

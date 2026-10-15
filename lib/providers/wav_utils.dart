@@ -90,3 +90,56 @@ List<Uint8List> splitWav(Uint8List wav, {int seconds = 25}) {
   }
   return chunks;
 }
+
+/// 16-bit PCM [data] as 16 kHz mono samples, the input on-device speech
+/// models expect. Channels are averaged and other rates resampled linearly,
+/// which is plenty for speech.
+Int16List toMono16k(WavData data) {
+  final f = data.format;
+  if (f.bitsPerSample != 16) {
+    throw const FormatException('Only 16-bit PCM WAV is supported');
+  }
+  // An Int16List view needs an even byte offset; copy in the rare odd case.
+  final bytes = data.pcm.offsetInBytes.isEven
+      ? data.pcm
+      : Uint8List.fromList(data.pcm);
+  final all =
+      Int16List.sublistView(bytes, 0, bytes.length - bytes.length % 2);
+  final ch = f.channels < 1 ? 1 : f.channels;
+  final frames = all.length ~/ ch;
+  Int16List mono;
+  if (ch == 1) {
+    mono = all;
+  } else {
+    mono = Int16List(frames);
+    for (var i = 0; i < frames; i++) {
+      var sum = 0;
+      for (var c = 0; c < ch; c++) {
+        sum += all[i * ch + c];
+      }
+      mono[i] = sum ~/ ch;
+    }
+  }
+  if (f.sampleRate == 16000 || frames == 0) return mono;
+  final outLen = (frames * 16000 / f.sampleRate).floor();
+  final out = Int16List(outLen);
+  final step = f.sampleRate / 16000;
+  for (var i = 0; i < outLen; i++) {
+    final x = i * step;
+    final j = x.floor();
+    final k = j + 1 < frames ? j + 1 : j;
+    final t = x - j;
+    out[i] = (mono[j] * (1 - t) + mono[k] * t).round();
+  }
+  return out;
+}
+
+/// Samples [start] to [start] + [n] of [pcm] scaled to -1..1.
+Float32List pcmToFloat(Int16List pcm, int start, int n) {
+  final end = (start + n).clamp(0, pcm.length);
+  final out = Float32List(end - start < 0 ? 0 : end - start);
+  for (var i = 0; i < out.length; i++) {
+    out[i] = pcm[start + i] / 32768.0;
+  }
+  return out;
+}

@@ -17,14 +17,15 @@ const _segmentsTable = '''
     language_code TEXT,
     status TEXT NOT NULL,
     error TEXT,
-    duration_ms INTEGER
+    duration_ms INTEGER,
+    lines TEXT
   )''';
 
 class NotesDb {
   final Database _db;
   NotesDb._(this._db);
 
-  static const version = 3;
+  static const version = 4;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi.
@@ -55,25 +56,26 @@ class NotesDb {
           await db.execute(_segmentsTable);
         },
         onUpgrade: (db, from, _) async {
-          if (from < 2) await _addColumn(db, 'clinical');
+          if (from < 2) await _addColumn(db, 'notes', 'clinical');
           if (from < 3) await _toSegments(db);
+          if (from < 4) await _addColumn(db, 'segments', 'lines');
         },
       ),
     );
     return NotesDb._(db);
   }
 
-  /// Adds a TEXT column to notes unless a half-migrated database already has it.
-  static Future<void> _addColumn(Database db, String name) async {
-    final cols = await db.rawQuery('PRAGMA table_info(notes)');
+  /// Adds a TEXT column unless a half-migrated database already has it.
+  static Future<void> _addColumn(Database db, String table, String name) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == name)) return;
-    await db.execute('ALTER TABLE notes ADD COLUMN $name TEXT');
+    await db.execute('ALTER TABLE $table ADD COLUMN $name TEXT');
   }
 
   /// v3: every existing note becomes a note with one recording, and its
   /// current title/summary/clinical note count as up to date.
   static Future<void> _toSegments(Database db) async {
-    await _addColumn(db, 'enriched_hash');
+    await _addColumn(db, 'notes', 'enriched_hash');
     await db.execute(_segmentsTable);
     await db.execute('''
       INSERT INTO segments (note_id, position, audio_path, transcript, english,

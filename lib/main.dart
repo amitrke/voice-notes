@@ -11,10 +11,17 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = SettingsStore();
   await settings.load();
+  await settings.models.load();
   final state = AppState(settings, await NotesDb.open());
   await state.init();
   runApp(
-    ChangeNotifierProvider.value(value: state, child: const VoiceNotesApp()),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: state),
+        ChangeNotifierProvider.value(value: settings.models),
+      ],
+      child: const VoiceNotesApp(),
+    ),
   );
 }
 

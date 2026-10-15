@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
 import '../models/note.dart';
+import '../providers/ai_provider.dart';
 import 'audio_input.dart';
 import 'format.dart';
 import 'note_page.dart';
@@ -59,7 +60,9 @@ class HomePage extends StatelessWidget {
           if (!state.hasActiveKey)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: _KeyBanner(onOpen: () => _openSettings(context)),
+              child: _KeyBanner(
+                  offline: state.settings.active == ProviderId.onDevice,
+                  onOpen: () => _openSettings(context)),
             ),
           if (state.hasAnyNotes)
             Padding(
@@ -158,7 +161,10 @@ class _RecordDock extends StatelessWidget {
 
 class _KeyBanner extends StatelessWidget {
   final VoidCallback onOpen;
-  const _KeyBanner({required this.onOpen});
+
+  /// On-device transcription needs a model rather than a key.
+  final bool offline;
+  const _KeyBanner({required this.onOpen, this.offline = false});
 
   @override
   Widget build(BuildContext context) {
@@ -178,7 +184,10 @@ class _KeyBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Add an API key to start transcribing. Your key stays on this device.',
+                    offline
+                        ? 'Download an offline model in Settings to start '
+                            'transcribing without internet.'
+                        : 'Add an API key to start transcribing. Your key stays on this device.',
                     style: TextStyle(
                       color: scheme.onPrimaryContainer,
                       height: 1.4,
