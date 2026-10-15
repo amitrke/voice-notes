@@ -17,6 +17,9 @@ class Segment {
   final String? error;
   final int? durationMs;
 
+  /// Timestamped text, when the provider gave it; empty otherwise.
+  final List<TimedLine> lines;
+
   const Segment({
     this.id,
     this.noteId,
@@ -28,6 +31,7 @@ class Segment {
     this.status = NoteStatus.processing,
     this.error,
     this.durationMs,
+    this.lines = const [],
   });
 
   Segment copyWith({
@@ -40,6 +44,7 @@ class Segment {
     NoteStatus? status,
     String? error,
     bool clearError = false,
+    List<TimedLine>? lines,
   }) =>
       Segment(
         id: id ?? this.id,
@@ -52,6 +57,7 @@ class Segment {
         status: status ?? this.status,
         error: clearError ? null : (error ?? this.error),
         durationMs: durationMs,
+        lines: lines ?? this.lines,
       );
 
   Map<String, Object?> toMap() => {
@@ -65,6 +71,9 @@ class Segment {
         'status': status.name,
         'error': error,
         'duration_ms': durationMs,
+        'lines': lines.isEmpty
+            ? null
+            : jsonEncode([for (final l in lines) l.toJson()]),
       };
 
   factory Segment.fromMap(Map<String, Object?> m) => Segment(
@@ -81,7 +90,20 @@ class Segment {
         ),
         error: m['error'] as String?,
         durationMs: m['duration_ms'] as int?,
+        lines: _linesFrom(m['lines'] as String?),
       );
+
+  static List<TimedLine> _linesFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      return [
+        for (final j in jsonDecode(raw) as List)
+          TimedLine.fromJson(j as Map<String, dynamic>),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
 }
 
 /// Fingerprint of the text a title, summary or clinical note was generated

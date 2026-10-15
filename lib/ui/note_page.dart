@@ -4,10 +4,12 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/app_state.dart';
+import '../data/srt_export.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import 'audio_input.dart';
@@ -28,6 +30,22 @@ class NotePage extends StatefulWidget {
 class _NotePageState extends State<NotePage> {
   bool _showEnglish = false;
   bool _enriching = false;
+  final _playback = Playback();
+
+  @override
+  void dispose() {
+    _playback.dispose();
+    super.dispose();
+  }
+
+  Future<void> _exportSrt(Note note, {required bool english}) async {
+    final dir = await getTemporaryDirectory();
+    final safe = note.title.replaceAll(RegExp(r'[^\w\- ]+'), '').trim();
+    final file = File('${dir.path}/${safe.isEmpty ? 'subtitles' : safe}'
+        '${english ? ' (English)' : ''}.srt');
+    await file.writeAsString(srtText(note, english: english));
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+  }
 
   Future<void> _enrich(AppState state, int id) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -164,6 +182,8 @@ class _NotePageState extends State<NotePage> {
                 await _regenerate(state, note.id!);
               } else if (v == 'retry') {
                 await state.retry(note.id!);
+              } else if (v == 'srt') {
+                await _exportSrt(note, english: showEnglish);
               }
             },
             itemBuilder: (_) => [
@@ -173,6 +193,12 @@ class _NotePageState extends State<NotePage> {
                     child: Text(note.clinical != null
                         ? 'Regenerate summary and clinical note'
                         : 'Regenerate summary')),
+              if (hasTimedText(note))
+                PopupMenuItem(
+                    value: 'srt',
+                    child: Text(showEnglish
+                        ? 'Export English subtitles (SRT)'
+                        : 'Export subtitles (SRT)')),
               const PopupMenuItem(
                   value: 'retry', child: Text('Transcribe again')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -270,6 +296,7 @@ class _NotePageState extends State<NotePage> {
                         index: i,
                         segment: seg,
                         count: note.segments.length,
+                        playback: _playback,
                         onRetry: () => state.retrySegment(note.id!, seg.id!),
                         onDelete: () => _deleteSegment(state, note, seg),
                       ),
@@ -317,11 +344,14 @@ class _NotePageState extends State<NotePage> {
             ],
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: SelectableText(
-                text.isEmpty ? 'No speech detected.' : text,
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(fontSize: 17, height: 1.6),
-              ),
+              child: text.isNotEmpty && hasTimedText(note)
+                  ? _TimedTranscript(
+                      note: note, english: showEnglish, playback: _playback)
+                  : SelectableText(
+                      text.isEmpty ? 'No speech detected.' : text,
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(fontSize: 17, height: 1.6),
+                    ),
             ),
             const SizedBox(height: 8),
             if (text.isNotEmpty)
@@ -398,6 +428,7 @@ class _SegmentTile extends StatelessWidget {
   final int index;
   final int count;
   final Segment segment;
+  final Playback playback;
   final VoidCallback onRetry;
   final VoidCallback onDelete;
   const _SegmentTile({
@@ -405,6 +436,7 @@ class _SegmentTile extends StatelessWidget {
     required this.index,
     required this.count,
     required this.segment,
+    required this.playback,
     required this.onRetry,
     required this.onDelete,
   });
@@ -436,7 +468,12 @@ class _SegmentTile extends StatelessWidget {
                 onPressed: onDelete,
               ),
             ]),
-          _AudioBar(path: seg.audioPath, knownDurationMs: seg.durationMs),
+          _AudioBar(
+            path: seg.audioPath,
+            knownDurationMs: seg.durationMs,
+            segmentId: seg.id!,
+            playback: playback,
+          ),
           if (seg.status == NoteStatus.processing)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
@@ -477,7 +514,14 @@ class _AudioBar extends StatefulWidget {
   /// Length recorded when the audio was captured, shown until the player
   /// has loaded the file and reports its own.
   final int? knownDurationMs;
-  const _AudioBar({required this.path, this.knownDurationMs});
+  final int segmentId;
+  final Playback playback;
+  const _AudioBar({
+    required this.path,
+    this.knownDurationMs,
+    required this.segmentId,
+    required this.playback,
+  });
 
   @override
   State<_AudioBar> createState() => _AudioBarState();
@@ -496,11 +540,23 @@ class _AudioBarState extends State<_AudioBar> {
     super.initState();
     _missing = !File(widget.path).existsSync();
     _subs
-      ..add(_player.onPlayerStateChanged.listen((s) => setState(() => _state = s)))
-      ..add(_player.onPositionChanged.listen((d) => setState(() => _pos = d)))
+      ..add(_player.onPlayerStateChanged.listen((s) {
+        setState(() => _state = s);
+        if (s == PlayerState.playing) widget.playback.started(widget.segmentId);
+      }))
+      ..add(_player.onPositionChanged.listen((d) {
+        setState(() => _pos = d);
+        widget.playback.moved(widget.segmentId, d.inMilliseconds);
+      }))
       ..add(_player.onDurationChanged.listen((d) => setState(() => _dur = d)))
-      ..add(_player.onPlayerComplete
-          .listen((_) => setState(() => _pos = Duration.zero)));
+      ..add(_player.onPlayerComplete.listen((_) {
+        setState(() => _pos = Duration.zero);
+        widget.playback.stopped(widget.segmentId);
+      }));
+    if (!_missing) {
+      widget.playback.attach(widget.segmentId,
+          playFrom: _playFrom, pause: _player.pause);
+    }
     // Loading the file up front gives the length (imports don't record one)
     // and lets the slider seek before the first play.
     if (!_missing) _player.setSource(DeviceFileSource(widget.path));
@@ -508,11 +564,22 @@ class _AudioBarState extends State<_AudioBar> {
 
   @override
   void dispose() {
+    widget.playback.detach(widget.segmentId);
     for (final s in _subs) {
       s.cancel();
     }
     _player.dispose();
     super.dispose();
+  }
+
+  Future<void> _playFrom(int ms) async {
+    if (_state == PlayerState.playing || _state == PlayerState.paused) {
+      await _player.seek(Duration(milliseconds: ms));
+      if (_state == PlayerState.paused) await _player.resume();
+    } else {
+      await _player.play(DeviceFileSource(widget.path),
+          position: Duration(milliseconds: ms));
+    }
   }
 
   Future<void> _toggle() async {
@@ -557,6 +624,125 @@ class _AudioBarState extends State<_AudioBar> {
           style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
         ),
       ],
+    );
+  }
+}
+
+/// Links a note's players to its transcript: which recording is playing and
+/// where, and a way for a tapped line to start playback there.
+class Playback extends ChangeNotifier {
+  final _players =
+      <int, ({Future<void> Function(int) playFrom, Future<void> Function() pause})>{};
+  int? _segment;
+  int _posMs = 0;
+
+  /// The recording playing (or last paused), if any.
+  int? get segment => _segment;
+  int get positionMs => _posMs;
+
+  void attach(int segmentId,
+          {required Future<void> Function(int) playFrom,
+          required Future<void> Function() pause}) =>
+      _players[segmentId] = (playFrom: playFrom, pause: pause);
+
+  void detach(int segmentId) => _players.remove(segmentId);
+
+  /// Plays [segmentId] from [ms], pausing any other recording.
+  Future<void> playAt(int segmentId, int ms) async {
+    for (final e in _players.entries) {
+      if (e.key != segmentId) await e.value.pause();
+    }
+    _segment = segmentId;
+    _posMs = ms;
+    notifyListeners();
+    await _players[segmentId]?.playFrom(ms);
+  }
+
+  void started(int segmentId) {
+    if (_segment == segmentId) return;
+    _segment = segmentId;
+    notifyListeners();
+  }
+
+  void moved(int segmentId, int ms) {
+    _segment = segmentId;
+    _posMs = ms;
+    notifyListeners();
+  }
+
+  void stopped(int segmentId) {
+    if (_segment != segmentId) return;
+    _segment = null;
+    _posMs = 0;
+    notifyListeners();
+  }
+}
+
+/// The transcript line by line. The line being played is highlighted, and
+/// tapping a line plays the recording from there. Recordings without
+/// timestamps show as plain text.
+class _TimedTranscript extends StatelessWidget {
+  final Note note;
+  final bool english;
+  final Playback playback;
+  const _TimedTranscript(
+      {required this.note, required this.english, required this.playback});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final style =
+        theme.textTheme.bodyLarge?.copyWith(fontSize: 17, height: 1.6);
+    final done =
+        note.segments.where((s) => s.status == NoteStatus.done).toList();
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        final children = <Widget>[];
+        for (final seg in done) {
+          // English needs every line translated to follow along; otherwise
+          // fall back to the recording's English text as a whole.
+          final timed = seg.lines.isNotEmpty &&
+              (!english || seg.lines.every((l) => l.english.isNotEmpty));
+          if (children.isNotEmpty) children.add(const SizedBox(height: 12));
+          if (!timed) {
+            final plain = english && seg.english.trim().isNotEmpty
+                ? seg.english
+                : seg.transcript;
+            if (plain.trim().isNotEmpty) {
+              children.add(SelectableText(plain.trim(), style: style));
+            }
+            continue;
+          }
+          for (final l in seg.lines) {
+            final active = playback.segment == seg.id &&
+                playback.positionMs >= l.startMs &&
+                playback.positionMs < l.endMs;
+            children.add(InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => playback.playAt(seg.id!, l.startMs),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: active ? scheme.secondaryContainer : null,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  english ? l.english : l.text,
+                  style: style?.copyWith(
+                      color: active ? scheme.onSecondaryContainer : null),
+                ),
+              ),
+            ));
+          }
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        );
+      },
     );
   }
 }

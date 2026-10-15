@@ -11,11 +11,25 @@ key; nothing goes through any server of ours.
 | Sarvam | `saaras:v3` | `translate` mode | yes (`unknown` → detected) | 16 kHz mono WAV, split into 25 s chunks (sync API limit is ~30 s) |
 | OpenAI | `whisper-1` | Whisper translations endpoint | yes | m4a (25 MB limit) |
 | Google Gemini | `gemini-3.5-flash` | one prompt returns both | yes | m4a (about 14 MB inline limit) |
+| On this device | Whisper base / small / turbo (sherpa-onnx, int8) | Whisper `translate` task (not turbo) | yes | 16 kHz mono WAV, split by voice detection |
 
 Model names are editable in Settings, so you do not need an app update when providers rename models.
 Imported non-WAV files with Sarvam are first decoded on the device to 16 kHz mono WAV (Android
 `MediaCodec`, iOS `AVAudioConverter`) and then sent through the same chunked sync API as recordings. Sarvam's
 batch job API returned empty transcripts for raw m4a, so it is only the fallback when decoding fails.
+
+### Offline transcription
+
+"On this device" runs Whisper through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) in a background
+isolate. Models are not bundled: Settings downloads one (Base ~160 MB, Small ~360 MB, Turbo ~1 GB) from
+Hugging Face URLs pinned to a commit, plus Silero voice detection (~0.6 MB). Files go to the app support folder
+(excluded from iCloud backup) as `.part`, resume with Range requests, and are checked against SHA-256 before
+use (`lib/services/model_store.dart`). Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
+30 s at a time); each piece is one timestamped line. It has no text model, so titles and summaries need a
+separate enrichment provider.
+
+Timestamped lines (on-device and OpenAI) drive the note screen's follow-along highlighting, tap-to-seek, and
+SRT export.
 
 ### Enrichment (titles, summaries, clinical notes)
 

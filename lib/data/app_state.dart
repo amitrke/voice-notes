@@ -13,7 +13,16 @@ class AppState extends ChangeNotifier {
   final SettingsStore settings;
   final NotesDb db;
 
-  AppState(this.settings, this.db);
+  AppState(this.settings, this.db) {
+    // A finished or deleted model download changes whether the on-device
+    // provider is ready. Progress ticks alone don't need a rebuild.
+    var ready = settings.offlineModel;
+    settings.models.addListener(() {
+      if (settings.offlineModel == ready) return;
+      ready = settings.offlineModel;
+      notifyListeners();
+    });
+  }
 
   List<Note> _notes = [];
   String _query = '';
@@ -31,7 +40,7 @@ class AppState extends ChangeNotifier {
   }
 
   bool get hasAnyNotes => _notes.isNotEmpty;
-  bool get hasActiveKey => settings.hasKey(settings.active);
+  bool get hasActiveKey => settings.isReady(settings.active);
 
   double get textScale => settings.textScale;
 
@@ -190,8 +199,9 @@ class AppState extends ChangeNotifier {
           segId,
           (s) => s.copyWith(
               status: NoteStatus.failed,
-              error:
-                  'Add your ${providerId.label} API key in Settings, then retry.'));
+              error: providerId.needsKey
+                  ? 'Add your ${providerId.label} API key in Settings, then retry.'
+                  : 'Download an offline model in Settings, then retry.'));
       return;
     }
     final path =
@@ -207,6 +217,7 @@ class AppState extends ChangeNotifier {
                 transcript: t.text,
                 english: t.english,
                 languageCode: t.languageCode,
+                lines: t.lines,
                 status: NoteStatus.done,
                 clearError: true,
               ));
@@ -233,7 +244,9 @@ class AppState extends ChangeNotifier {
     }
     // Only the first summary is automatic. After that, new recordings leave
     // the note out of date for the user to regenerate.
-    final provider = settings.build(settings.textActive);
+    final provider = settings.textActive.canText
+        ? settings.build(settings.textActive)
+        : null;
     if (settings.autoSummary &&
         n.transcript.trim().isNotEmpty &&
         n.enrichedHash == null &&
@@ -266,9 +279,7 @@ class AppState extends ChangeNotifier {
     final n = byId(id);
     if (n == null) return null;
     final provider = settings.build(settings.textActive);
-    if (provider == null) {
-      return 'Add an API key for ${settings.textActive.label} in Settings.';
-    }
+    if (provider == null || !settings.textActive.canText) return _noTextProvider;
     try {
       final report = await buildClinicalReport(
         provider,
@@ -295,9 +306,7 @@ class AppState extends ChangeNotifier {
     final n = byId(id);
     if (n == null) return null;
     final provider = settings.build(settings.textActive);
-    if (provider == null) {
-      return 'Add an API key for ${settings.textActive.label} in Settings.';
-    }
+    if (provider == null || !settings.textActive.canText) return _noTextProvider;
     try {
       final source = n.english.isNotEmpty ? n.english : n.transcript;
       final s = await provider.summarize(source);
@@ -342,6 +351,11 @@ class AppState extends ChangeNotifier {
       if (await f.exists()) await f.delete();
     } catch (_) {}
   }
+
+  String get _noTextProvider => settings.textActive.canText
+      ? 'Add an API key for ${settings.textActive.label} in Settings.'
+      : 'On-device transcription has no text model. Turn on "Use a different '
+          'provider for text" in Settings.';
 
   static String _fallbackTitle(String text) {
     final words = text.trim().split(RegExp(r'\s+'));

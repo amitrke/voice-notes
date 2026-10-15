@@ -14,24 +14,61 @@ enum ProviderId {
   // for transcription.
   openrouter('OpenRouter', 'Text models only, including free ones',
       RecordingFormat.m4a,
-      canTranscribe: false);
+      canTranscribe: false),
+  // Whisper running on the phone: no key and no network, but no text model,
+  // so titles and summaries need another provider.
+  onDevice('On this device', 'Works offline. Download a model first',
+      RecordingFormat.wav16kMono,
+      needsKey: false, canText: false);
 
   final String label;
   final String blurb;
   final RecordingFormat recordingFormat;
   final bool canTranscribe;
+  final bool canText;
+  final bool needsKey;
   const ProviderId(this.label, this.blurb, this.recordingFormat,
-      {this.canTranscribe = true});
+      {this.canTranscribe = true, this.canText = true, this.needsKey = true});
+}
+
+/// A stretch of a recording and what was said in it. Times are milliseconds
+/// from the start of that recording.
+class TimedLine {
+  final int startMs;
+  final int endMs;
+  final String text;
+
+  /// English for the same stretch, when the provider translates line by line.
+  final String english;
+  const TimedLine(this.startMs, this.endMs, this.text, {this.english = ''});
+
+  Map<String, Object?> toJson() => {
+        's': startMs,
+        'e': endMs,
+        't': text,
+        if (english.isNotEmpty) 'en': english,
+      };
+
+  factory TimedLine.fromJson(Map<String, dynamic> j) => TimedLine(
+        (j['s'] as num).toInt(),
+        (j['e'] as num).toInt(),
+        (j['t'] ?? '').toString(),
+        english: (j['en'] ?? '').toString(),
+      );
 }
 
 class Transcription {
   final String text;
   final String english;
   final String? languageCode;
+
+  /// Timestamps for the text, when the provider gives them.
+  final List<TimedLine> lines;
   const Transcription({
     required this.text,
     this.english = '',
     this.languageCode,
+    this.lines = const [],
   });
 }
 

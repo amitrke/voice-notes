@@ -3,10 +3,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/ai_provider.dart';
 import '../providers/gemini_provider.dart';
+import '../providers/on_device_provider.dart';
 import '../providers/openai_provider.dart';
 import '../providers/openrouter_provider.dart';
 import '../providers/sarvam_provider.dart';
 import '../services/audio_converter.dart';
+import '../services/model_store.dart';
 import 'text_scale.dart';
 
 class ModelDefaults {
@@ -20,6 +22,7 @@ const modelDefaults = {
   ProviderId.openai: ModelDefaults('whisper-1', 'gpt-4o-mini'),
   ProviderId.gemini: ModelDefaults('gemini-3.5-flash', 'gemini-3.5-flash'),
   ProviderId.openrouter: ModelDefaults('', 'openrouter/free'),
+  ProviderId.onDevice: ModelDefaults('', ''),
 };
 
 /// API keys live in the platform keystore/keychain; everything else in
@@ -29,8 +32,12 @@ class SettingsStore {
   late final SharedPreferences _prefs;
   final _keys = <ProviderId, String>{};
 
-  SettingsStore({FlutterSecureStorage? secure})
-      : _secure = secure ?? const FlutterSecureStorage();
+  /// Downloaded offline models, for [ProviderId.onDevice].
+  final ModelStore models;
+
+  SettingsStore({FlutterSecureStorage? secure, ModelStore? models})
+      : _secure = secure ?? const FlutterSecureStorage(),
+        models = models ?? ModelStore();
 
   /// Provider that transcribes audio.
   ProviderId active = ProviderId.sarvam;
@@ -42,6 +49,9 @@ class SettingsStore {
   bool autoSummary = true;
   bool clinical = false;
   double textScale = defaultTextScale;
+
+  /// The offline model the user picked; see [offlineModel].
+  String? _offlineModel;
 
   Future<void> load() async {
     _prefs = await SharedPreferences.getInstance();
@@ -55,6 +65,7 @@ class SettingsStore {
     autoSummary = _prefs.getBool('autoSummary') ?? true;
     clinical = _prefs.getBool('clinical') ?? false;
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
+    _offlineModel = _prefs.getString('offlineModel');
     for (final id in ProviderId.values) {
       final k = await _secure.read(key: 'apikey_${id.name}');
       if (k != null && k.isNotEmpty) _keys[id] = k;
@@ -63,6 +74,25 @@ class SettingsStore {
 
   String apiKey(ProviderId id) => _keys[id] ?? '';
   bool hasKey(ProviderId id) => apiKey(id).isNotEmpty;
+
+  /// The provider can be used: its key is saved, or for on-device
+  /// transcription, a model has been downloaded.
+  bool isReady(ProviderId id) =>
+      id.needsKey ? hasKey(id) : offlineModel != null;
+
+  /// The installed offline model to use: the one picked if it is installed,
+  /// else any installed one.
+  String? get offlineModel {
+    if (_offlineModel != null && models.isInstalled(_offlineModel!)) {
+      return _offlineModel;
+    }
+    return models.catalog.where((m) => models.isInstalled(m.id)).firstOrNull?.id;
+  }
+
+  Future<void> setOfflineModel(String id) async {
+    _offlineModel = id;
+    await _prefs.setString('offlineModel', id);
+  }
 
   String sttModel(ProviderId id) =>
       _prefs.getString('stt_${id.name}') ?? modelDefaults[id]!.stt;
@@ -132,9 +162,10 @@ class SettingsStore {
     await _prefs.setBool('autoSummary', v);
   }
 
-  /// Builds the provider for [id], or null when no key has been saved.
+  /// Builds the provider for [id], or null when it is not ready (see
+  /// [isReady]).
   AiProvider? build(ProviderId id) {
-    if (!hasKey(id)) return null;
+    if (!isReady(id)) return null;
     final key = apiKey(id);
     switch (id) {
       case ProviderId.sarvam:
@@ -152,6 +183,11 @@ class SettingsStore {
             apiKey: key, sttModel: sttModel(id), textModel: textModel(id));
       case ProviderId.openrouter:
         return OpenRouterProvider(apiKey: key, textModel: textModel(id));
+      case ProviderId.onDevice:
+        final m = models.installed(offlineModel!);
+        return m == null
+            ? null
+            : OnDeviceProvider(model: m, toWav: convertToWav16kMono);
     }
   }
 }
