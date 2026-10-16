@@ -50,7 +50,12 @@ class OnDeviceProvider implements AiProvider {
 
   Future<Transcription> _transcribe(
       File audio, bool translate, bool speakers) async {
-    for (final path in [model.encoder, model.decoder, model.tokens, model.vad]) {
+    for (final path in [
+      model.encoder,
+      if (model.decoder.isNotEmpty) model.decoder,
+      model.tokens,
+      model.vad,
+    ]) {
       if (!File(path).existsSync()) {
         throw const ProviderException(
             'The offline model is missing. Download it again in Settings.');
@@ -77,6 +82,8 @@ class OnDeviceProvider implements AiProvider {
       decoder: model.decoder,
       tokens: model.tokens,
       vad: model.vad,
+      kind: model.kind,
+      language: model.model.language,
       translate: translate && model.model.canTranslate,
       segmentationModel: canDiarize ? diarize.segmentation : null,
       embeddingModel: canDiarize ? diarize.embedding : null,
@@ -110,6 +117,10 @@ class _Job {
   final String wav, encoder, decoder, tokens, vad;
   final bool translate;
   final int threads;
+  final ModelKind kind;
+
+  /// The one language of a single-language model.
+  final String? language;
 
   /// Set when speakers are to be told apart.
   final String? segmentationModel, embeddingModel;
@@ -121,6 +132,8 @@ class _Job {
     required this.vad,
     required this.translate,
     required this.threads,
+    this.kind = ModelKind.whisper,
+    this.language,
     this.segmentationModel,
     this.embeddingModel,
   });
@@ -138,8 +151,13 @@ Transcription _run(_Job job) {
   final pieces = speechPieces(pcm, job.vad);
   if (pieces.isEmpty) return const Transcription(text: '');
 
-  final language = _detectLanguage(job, pcm, pieces);
-  final native = _decodeAll(job, pcm, pieces, language, 'transcribe');
+  // CTC models know their language (or, for Omnilingual, do not report it).
+  final language = job.kind == ModelKind.whisper
+      ? _detectLanguage(job, pcm, pieces)
+      : (job.language ?? '');
+  final native = job.kind == ModelKind.whisper
+      ? _decodeAll(job, pcm, pieces, language, 'transcribe')
+      : _decodeCtc(job, pcm, pieces);
   // Translating English to English would only paraphrase it.
   final english = job.translate && language != 'en'
       ? _decodeAll(job, pcm, pieces, language, 'translate')
@@ -314,6 +332,33 @@ List<String> _decodeAll(_Job job, Int16List pcm, List<Piece> pieces,
     return [
       for (final piece in pieces) _decode(recognizer, pcm, piece),
     ];
+  } finally {
+    recognizer.free();
+  }
+}
+
+/// Single-file CTC models (IndicConformer, Omnilingual): no language or task
+/// to pass in, just the model and its token list.
+List<String> _decodeCtc(_Job job, Int16List pcm, List<Piece> pieces) {
+  final model = job.kind == ModelKind.omnilingual
+      ? sherpa.OfflineModelConfig(
+          omnilingual:
+              sherpa.OfflineOmnilingualAsrCtcModelConfig(model: job.encoder),
+          tokens: job.tokens,
+          numThreads: job.threads,
+          debug: false,
+        )
+      : sherpa.OfflineModelConfig(
+          nemoCtc: sherpa.OfflineNemoEncDecCtcModelConfig(model: job.encoder),
+          tokens: job.tokens,
+          modelType: 'nemo_ctc',
+          numThreads: job.threads,
+          debug: false,
+        );
+  final recognizer =
+      sherpa.OfflineRecognizer(sherpa.OfflineRecognizerConfig(model: model));
+  try {
+    return [for (final piece in pieces) _decode(recognizer, pcm, piece)];
   } finally {
     recognizer.free();
   }

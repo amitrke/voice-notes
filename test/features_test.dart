@@ -603,6 +603,89 @@ void main() {
     });
   });
 
+  group('Indian-language models', () {
+    test('catalog entries are pinned, checksummed and described', () {
+      final ids = offlineModels.map((m) => m.id).toList();
+      expect(ids.toSet(), hasLength(ids.length));
+      expect(
+          ids,
+          containsAll(
+              ['omnilingual', 'indic-ta', 'indic-te', 'indic-ml']));
+      for (final m in offlineModels) {
+        for (final f in m.files) {
+          expect(f.url, startsWith('https://huggingface.co/'), reason: f.name);
+          expect(f.url, matches(RegExp(r'/resolve/[0-9a-f]{40}/')),
+              reason: '${f.name} must be pinned to a commit');
+          expect(f.sha256, matches(RegExp(r'^[0-9a-f]{64}$')), reason: f.name);
+          expect(f.size, greaterThan(0));
+        }
+      }
+    });
+
+    test('single-file models have no decoder and cannot translate', () {
+      for (final id in ['omnilingual', 'indic-ta', 'indic-te', 'indic-ml']) {
+        final m = offlineModelById(id)!;
+        expect(m.kind, isNot(ModelKind.whisper));
+        expect(m.decoder, isNull);
+        expect(m.canTranslate, isFalse);
+        expect(m.files, hasLength(2));
+      }
+      expect(offlineModelById('indic-ta')!.language, 'ta');
+      expect(offlineModelById('indic-ta')!.kind, ModelKind.nemoCtc);
+      expect(offlineModelById('omnilingual')!.language, isNull);
+      expect(offlineModelById('omnilingual')!.kind, ModelKind.omnilingual);
+      expect(offlineModelById('base')!.canTranslate, isTrue);
+      expect(offlineModelById('base')!.kind, ModelKind.whisper);
+    });
+
+    test('download fetches the model, its tokens and voice detection only',
+        () async {
+      final modelBytes = utf8.encode('ctc model');
+      final tokenBytes = utf8.encode('<unk> 0');
+      final vadBytes = utf8.encode('vad');
+      ModelFile file(String name, List<int> b) => ModelFile(name,
+          'https://example.test/$name', b.length, sha256.convert(b).toString());
+      final model = OfflineModel(
+        id: 'ctc',
+        label: 'CTC',
+        blurb: '',
+        kind: ModelKind.nemoCtc,
+        language: 'ta',
+        encoder: file('model.onnx', modelBytes),
+        tokens: file('tokens.txt', tokenBytes),
+      );
+      final asked = <String>[];
+      final store = ModelStore(
+        baseDir: () async => tmp,
+        client: () => MockClient((req) async {
+          final name = req.url.pathSegments.last;
+          asked.add(name);
+          return http.Response.bytes(
+              {'model.onnx': modelBytes, 'tokens.txt': tokenBytes}[name] ??
+                  vadBytes,
+              200);
+        }),
+        catalog: [model],
+        vad: file('vad.onnx', vadBytes),
+      );
+      await store.load();
+      expect(await store.download('ctc'), isNull);
+      expect(asked, ['model.onnx', 'tokens.txt', 'vad.onnx']);
+      final installed = store.installed('ctc')!;
+      expect(installed.kind, ModelKind.nemoCtc);
+      expect(installed.decoder, '');
+      expect(File(installed.encoder).readAsBytesSync(), modelBytes);
+      expect(File(installed.tokens).readAsBytesSync(), tokenBytes);
+
+      final again = ModelStore(
+          baseDir: () async => tmp,
+          catalog: [model],
+          vad: file('vad.onnx', vadBytes));
+      await again.load();
+      expect(again.isInstalled('ctc'), isTrue);
+    });
+  });
+
   group('shared files', () {
     const channel = MethodChannel('com.subnext.voicenotes/share');
 

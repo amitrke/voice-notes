@@ -510,27 +510,29 @@ class _OfflineModels extends StatelessWidget {
           Text(
             'Download a model once. After that, transcription works without '
             'internet and audio stays on your phone. Wi-Fi is recommended. '
-            'Larger models are more accurate but slower. Indian languages '
-            'other than Hindi come out less accurate than with Sarvam.',
+            'Larger models are more accurate but slower. For Indian languages, '
+            'the models below the Whisper ones may do better than Whisper, '
+            'but Sarvam is still the one built for them.',
             style: muted,
           ),
           const SizedBox(height: 8),
-          for (final m in models.catalog)
-            _ModelRow(
-              model: m,
-              installed: models.isInstalled(m.id),
-              selected: selected == m.id,
-              downloading: models.downloading == m.id,
-              busy: models.downloading != null,
-              progress: models.progress,
-              onSelect: () async {
-                await store.setOfflineModel(m.id);
-                onChanged();
-              },
-              onDownload: () => _download(context, models, m.id),
-              onCancel: models.cancel,
-              onDelete: () => _delete(context, models, m),
-            ),
+          for (final m in models.catalog.where((m) => m.kind == ModelKind.whisper))
+            _modelRow(context, models, m, selected),
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 2),
+            child: Text('Indian languages',
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(color: theme.colorScheme.primary)),
+          ),
+          Text(
+            'Each model below listens in one way: the language-specific ones '
+            'transcribe only their language, and Omnilingual covers many '
+            'without naming which one it heard. None of them translate to '
+            'English. Try one on a short recording before relying on it.',
+            style: muted,
+          ),
+          for (final m in models.catalog.where((m) => m.kind != ModelKind.whisper))
+            _modelRow(context, models, m, selected),
           const Divider(),
           _SpeakerModelsRow(
             installed: models.isInstalled(speakerModelsId),
@@ -549,7 +551,7 @@ class _OfflineModels extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'The Turbo model cannot translate to English, so notes '
+                'The selected model cannot translate to English, so notes '
                 'transcribed with it have only the original language.',
                 style: muted,
               ),
@@ -558,6 +560,24 @@ class _OfflineModels extends StatelessWidget {
       ),
     );
   }
+
+  Widget _modelRow(BuildContext context, ModelStore models, OfflineModel m,
+          String? selected) =>
+      _ModelRow(
+        model: m,
+        installed: models.isInstalled(m.id),
+        selected: selected == m.id,
+        downloading: models.downloading == m.id,
+        busy: models.downloading != null,
+        progress: models.progress,
+        onSelect: () async {
+          await store.setOfflineModel(m.id);
+          onChanged();
+        },
+        onDownload: () => _download(context, models, m.id),
+        onCancel: models.cancel,
+        onDelete: () => _delete(context, models, m),
+      );
 }
 
 class _ModelRow extends StatelessWidget {

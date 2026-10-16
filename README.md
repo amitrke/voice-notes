@@ -24,7 +24,13 @@ batch job API returned empty transcripts for raw m4a, so it is only the fallback
 isolate. Models are not bundled: Settings downloads one (Base ~160 MB, Small ~360 MB, Turbo ~1 GB) from
 Hugging Face URLs pinned to a commit, plus Silero voice detection (~0.6 MB). Files go to the app support folder
 (excluded from iCloud backup) as `.part`, resume with Range requests, and are checked against SHA-256 before
-use (`lib/services/model_store.dart`). Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
+use (`lib/services/model_store.dart`).
+
+Indian-language models sit beside the Whisper ones in the same list: Meta's Omnilingual ASR 300M (Apache-2.0, many
+languages, ~365 MB) and AI4Bharat IndicConformer for Tamil, Telugu and Malayalam (MIT, ~137 MB each, one language
+each). They only transcribe: no language detection for Omnilingual, no English translation. The IndicConformer files
+are community conversions for sherpa-onnx (`csndhanasekar/...`), not published by AI4Bharat, and neither family has
+been run on a device yet. There is no Hindi-only model: no sherpa-ready export was found. Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
 30 s at a time); each piece is one timestamped line. It has no text model, so titles and summaries need a
 separate enrichment provider.
 
