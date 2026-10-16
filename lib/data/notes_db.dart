@@ -21,11 +21,17 @@ const _segmentsTable = '''
     lines TEXT
   )''';
 
+const _foldersTable = '''
+  CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL
+  )''';
+
 class NotesDb {
   final Database _db;
   NotesDb._(this._db);
 
-  static const version = 4;
+  static const version = 5;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi.
@@ -51,25 +57,34 @@ class NotesDb {
               status TEXT NOT NULL,
               error TEXT,
               clinical TEXT,
-              enriched_hash TEXT
+              enriched_hash TEXT,
+              folder_id INTEGER,
+              speakers TEXT
             )''');
           await db.execute(_segmentsTable);
+          await db.execute(_foldersTable);
         },
         onUpgrade: (db, from, _) async {
           if (from < 2) await _addColumn(db, 'notes', 'clinical');
           if (from < 3) await _toSegments(db);
           if (from < 4) await _addColumn(db, 'segments', 'lines');
+          if (from < 5) {
+            await _addColumn(db, 'notes', 'folder_id', type: 'INTEGER');
+            await _addColumn(db, 'notes', 'speakers');
+            await db.execute(_foldersTable);
+          }
         },
       ),
     );
     return NotesDb._(db);
   }
 
-  /// Adds a TEXT column unless a half-migrated database already has it.
-  static Future<void> _addColumn(Database db, String table, String name) async {
+  /// Adds a column (TEXT unless [type] says otherwise) unless a half-migrated database already has it.
+  static Future<void> _addColumn(Database db, String table, String name,
+      {String type = 'TEXT'}) async {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == name)) return;
-    await db.execute('ALTER TABLE $table ADD COLUMN $name TEXT');
+    await db.execute('ALTER TABLE $table ADD COLUMN $name $type');
   }
 
   /// v3: every existing note becomes a note with one recording, and its
@@ -146,6 +161,24 @@ class NotesDb {
   Future<void> delete(int id) => _db.transaction((txn) async {
         await txn.delete('segments', where: 'note_id = ?', whereArgs: [id]);
         await txn.delete('notes', where: 'id = ?', whereArgs: [id]);
+      });
+
+  Future<List<Folder>> folders() async => (await _db.query('folders',
+          orderBy: 'name COLLATE NOCASE'))
+      .map(Folder.fromMap)
+      .toList();
+
+  Future<Folder> insertFolder(String name) async =>
+      Folder(id: await _db.insert('folders', {'name': name}), name: name);
+
+  Future<void> renameFolder(int id, String name) =>
+      _db.update('folders', {'name': name}, where: 'id = ?', whereArgs: [id]);
+
+  /// Removes the folder; its notes stay, unfiled.
+  Future<void> deleteFolder(int id) => _db.transaction((txn) async {
+        await txn.update('notes', {'folder_id': null},
+            where: 'folder_id = ?', whereArgs: [id]);
+        await txn.delete('folders', where: 'id = ?', whereArgs: [id]);
       });
 
   Future<void> close() => _db.close();

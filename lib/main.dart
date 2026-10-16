@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'data/app_state.dart';
 import 'data/notes_db.dart';
 import 'data/settings_store.dart';
+import 'services/share_intake.dart';
 import 'ui/home_page.dart';
 import 'ui/theme.dart';
 
@@ -14,6 +17,10 @@ Future<void> main() async {
   await settings.models.load();
   final state = AppState(settings, await NotesDb.open());
   await state.init();
+  // Audio shared from other apps becomes a new note.
+  unawaited(ShareIntake(
+    onFile: (path) async => state.addAudio(await state.importFile(path)),
+  ).start());
   runApp(
     MultiProvider(
       providers: [

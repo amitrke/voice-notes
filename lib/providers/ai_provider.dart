@@ -40,13 +40,23 @@ class TimedLine {
 
   /// English for the same stretch, when the provider translates line by line.
   final String english;
-  const TimedLine(this.startMs, this.endMs, this.text, {this.english = ''});
+
+  /// Who spoke, as an id such as "S1" that the note maps to a name. Null when
+  /// speakers were not identified.
+  final String? speaker;
+  const TimedLine(this.startMs, this.endMs, this.text,
+      {this.english = '', this.speaker});
+
+  TimedLine copyWith({String? text, String? english, String? speaker}) =>
+      TimedLine(startMs, endMs, text ?? this.text,
+          english: english ?? this.english, speaker: speaker ?? this.speaker);
 
   Map<String, Object?> toJson() => {
         's': startMs,
         'e': endMs,
         't': text,
         if (english.isNotEmpty) 'en': english,
+        if (speaker != null) 'sp': speaker,
       };
 
   factory TimedLine.fromJson(Map<String, dynamic> j) => TimedLine(
@@ -54,6 +64,7 @@ class TimedLine {
         (j['e'] as num).toInt(),
         (j['t'] ?? '').toString(),
         english: (j['en'] ?? '').toString(),
+        speaker: j['sp'] as String?,
       );
 }
 
@@ -90,8 +101,13 @@ abstract class AiProvider {
   RecordingFormat get recordingFormat;
 
   /// Transcribes [audio] in its original language and, when [translate] is
-  /// set, also returns an English version.
-  Future<Transcription> transcribe(File audio, {required bool translate});
+  /// set, also returns an English version. [vocabulary] lists names and terms
+  /// to listen for, by providers that accept a hint; the rest ignore it. With
+  /// [speakers], providers that can tell voices apart label each line.
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false});
 
   /// Produces a short title and summary for [text].
   Future<NoteSummary> summarize(String text);

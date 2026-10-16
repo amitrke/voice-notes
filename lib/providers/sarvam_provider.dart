@@ -44,7 +44,10 @@ class SarvamProvider implements AiProvider {
   Map<String, String> get _headers => {'api-subscription-key': apiKey};
 
   @override
-  Future<Transcription> transcribe(File audio, {required bool translate}) async {
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false}) async {
     final isWav = p.extension(audio.path).toLowerCase() == '.wav';
     if (isWav) return _transcribeWav(await audio.readAsBytes(), translate);
 

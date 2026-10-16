@@ -17,16 +17,38 @@ class ModelFile {
   const ModelFile(this.name, this.url, this.size, this.sha256);
 }
 
-/// A Whisper model that runs on the device through sherpa-onnx.
+/// How a model is run by sherpa-onnx.
+enum ModelKind {
+  /// OpenAI Whisper: an encoder and a decoder, any language, can translate.
+  whisper,
+
+  /// A NeMo CTC model (AI4Bharat IndicConformer): one file, one language.
+  nemoCtc,
+
+  /// Meta's Omnilingual ASR CTC model: one file, 1,600+ languages.
+  omnilingual,
+}
+
+/// A speech model that runs on the device through sherpa-onnx.
 class OfflineModel {
   final String id;
   final String label;
   final String blurb;
-  final ModelFile encoder;
-  final ModelFile decoder;
-  final ModelFile tokens;
 
-  /// Whisper's translate-to-English task. Turbo was trained without it.
+  /// The Whisper encoder; for single-file models ([kind] other than whisper),
+  /// the model itself.
+  final ModelFile encoder;
+
+  /// The Whisper decoder; null for single-file models.
+  final ModelFile? decoder;
+  final ModelFile tokens;
+  final ModelKind kind;
+
+  /// The one language a single-language model speaks ("ta"); null otherwise.
+  final String? language;
+
+  /// Whisper's translate-to-English task. Turbo was trained without it, and
+  /// the other kinds only transcribe.
   final bool canTranslate;
 
   const OfflineModel({
@@ -34,18 +56,21 @@ class OfflineModel {
     required this.label,
     required this.blurb,
     required this.encoder,
-    required this.decoder,
+    this.decoder,
     required this.tokens,
-    this.canTranslate = true,
-  });
+    this.kind = ModelKind.whisper,
+    this.language,
+    bool? canTranslate,
+  }) : canTranslate = canTranslate ?? kind == ModelKind.whisper;
 
-  List<ModelFile> get files => [encoder, decoder, tokens];
+  List<ModelFile> get files => [encoder, ?decoder, tokens];
   int get size => files.fold(0, (a, f) => a + f.size);
 }
 
 /// Hugging Face URLs pinned to a commit, so a file can never change under us.
-String _hf(String repo, String commit, String file) =>
-    'https://huggingface.co/csukuangfj/$repo/resolve/$commit/$file';
+String _hf(String repo, String commit, String file,
+        {String owner = 'csukuangfj'}) =>
+    'https://huggingface.co/$owner/$repo/resolve/$commit/$file';
 
 const _tokensSha =
     'b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126';
@@ -101,7 +126,69 @@ final offlineModels = <OfflineModel>[
         'turbo-tokens.txt', _tokensSize, _tokensSha),
     canTranslate: false,
   ),
+  // Meta's Omnilingual ASR (the successor to MMS, Apache-2.0). One model for
+  // many languages, including the Indian ones, but it neither detects the
+  // language nor translates.
+  OfflineModel(
+    id: 'omnilingual',
+    label: 'Many languages (Omnilingual)',
+    blurb: 'Meta model for 1,600+ languages, including Hindi, Tamil, '
+        'Telugu, Bengali and more. Transcribes only; it does not translate '
+        'or name the language.',
+    kind: ModelKind.omnilingual,
+    encoder: ModelFile(
+      'omnilingual-model.int8.onnx',
+      'https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/6abf1ece20cd2308bdb7d13cd78ec1c44fa4c094/model.int8.onnx',
+      365352120,
+      'e7c4e54ee4c4c47829cc6667d5d00ed8ea7bef1dcfeef0fce766f77752a2726c',
+    ),
+    tokens: ModelFile(
+      'omnilingual-tokens.txt',
+      'https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/6abf1ece20cd2308bdb7d13cd78ec1c44fa4c094/tokens.txt',
+      86423,
+      'a7a044c52cb29cbe8b0dc1953e92cefd4ca16b0ed968177b6beab21f9a7d0b31',
+    ),
+  ),
+  // AI4Bharat IndicConformer (MIT), converted for sherpa-onnx by a community
+  // contributor (not by AI4Bharat). Each model speaks one language.
+  _indic('ta', 'Tamil', 'a41ba03ed8e489eda5e108cb49099b7c9cf83e8b',
+      'dfedd42ca1a143fa0f08808b6b5d8f03d1a86e904d68375b335e39417128c0de',
+      137563718, 3299,
+      '61c6ad5e1d4b28ebbd38853209cf169bdc4dcd62cc32d9ec5185f3530371636d'),
+  _indic('te', 'Telugu', '638940e6fe0302e50042e865a26d5e45579ebce5',
+      '076cce7dfc7103d35776323c29cb13422be914d58018f625c08cbb0471683359',
+      137563720, 2963,
+      '02488cdcc1e893b392b1ba24f47508e7b7c64b117be249a0d09c5d8b65ecdfcb'),
+  _indic('ml', 'Malayalam', '394e2c20b57eb0db12839ecff00f904a55ea9f47',
+      '357382eb9ad4ef45c9269042af953e627ec9ca66a396cad1a2f4ed8562c012a1',
+      137563723, 3080,
+      '60eb97740574a55504786d4ac0699b14280977ec346a7d9a9bbef4deeb1e559b'),
 ];
+
+OfflineModel _indic(String code, String name, String commit, String modelSha,
+        int modelSize, int tokensSize, String tokensSha) =>
+    OfflineModel(
+      id: 'indic-$code',
+      label: '$name only (IndicConformer)',
+      blurb: 'Made for $name only, so it cannot detect other languages or '
+          'translate. AI4Bharat model, converted by a community contributor.',
+      kind: ModelKind.nemoCtc,
+      language: code,
+      encoder: ModelFile(
+        'model.int8.onnx',
+        _hf('sherpa-onnx-indicconformer-$code-int8', commit, 'model.int8.onnx',
+            owner: 'csndhanasekar'),
+        modelSize,
+        modelSha,
+      ),
+      tokens: ModelFile(
+        'tokens.txt',
+        _hf('sherpa-onnx-indicconformer-$code-int8', commit, 'tokens.txt',
+            owner: 'csndhanasekar'),
+        tokensSize,
+        tokensSha,
+      ),
+    );
 
 /// Silero voice activity detection: splits recordings into the short speech
 /// pieces Whisper can take (it reads at most 30 s at a time). Downloaded with
@@ -113,6 +200,27 @@ const vadFile = ModelFile(
   '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
 );
 
+/// The two small models that tell voices apart on the device: pyannote
+/// segmentation (who talks when) and a speaker embedding (whose voice it is).
+/// Pinned to Hugging Face commits like the Whisper files.
+const speakerSegmentationFile = ModelFile(
+  'segmentation.int8.onnx',
+  'https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.int8.onnx',
+  1540506,
+  'd582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d',
+);
+
+const speakerEmbeddingFile = ModelFile(
+  'embedding.onnx',
+  'https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx',
+  28281164,
+  'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2',
+);
+
+/// Id [ModelStore.download] and [ModelStore.delete] take for the speaker
+/// models, which are installed separately from the Whisper models.
+const speakerModelsId = 'speakers';
+
 OfflineModel? offlineModelById(String? id) =>
     offlineModels.where((m) => m.id == id).firstOrNull;
 
@@ -120,11 +228,22 @@ OfflineModel? offlineModelById(String? id) =>
 class InstalledModel {
   final OfflineModel model;
   final String encoder;
+
+  /// Empty for single-file models.
   final String decoder;
   final String tokens;
   final String vad;
   const InstalledModel(
       this.model, this.encoder, this.decoder, this.tokens, this.vad);
+
+  ModelKind get kind => model.kind;
+}
+
+/// Paths of the installed speaker models.
+class InstalledSpeakerModels {
+  final String segmentation;
+  final String embedding;
+  const InstalledSpeakerModels(this.segmentation, this.embedding);
 }
 
 class ModelDownloadException implements Exception {
@@ -148,12 +267,16 @@ class ModelStore extends ChangeNotifier {
   /// The models on offer ([offlineModels]; tests pass small fakes).
   final List<OfflineModel> catalog;
   final ModelFile vad;
+  final ModelFile speakerSegmentation;
+  final ModelFile speakerEmbedding;
 
   ModelStore({
     Future<Directory> Function()? baseDir,
     http.Client Function()? client,
     List<OfflineModel>? catalog,
     this.vad = vadFile,
+    this.speakerSegmentation = speakerSegmentationFile,
+    this.speakerEmbedding = speakerEmbeddingFile,
   })  : _baseDir = baseDir ?? getApplicationSupportDirectory,
         _newClient = client ?? http.Client.new,
         catalog = catalog ?? offlineModels;
@@ -162,6 +285,7 @@ class ModelStore extends ChangeNotifier {
 
   late Directory _root;
   final _installed = <String>{};
+  bool _speakersInstalled = false;
 
   String? _downloading;
   int _received = 0;
@@ -180,7 +304,8 @@ class ModelStore extends ChangeNotifier {
   /// Message from the last failed download, until the next one starts.
   String? get error => _error;
 
-  bool isInstalled(String id) => _installed.contains(id);
+  bool isInstalled(String id) =>
+      id == speakerModelsId ? _speakersInstalled : _installed.contains(id);
   bool get hasAny => _installed.isNotEmpty;
 
   Future<void> load() async {
@@ -189,6 +314,7 @@ class ModelStore extends ChangeNotifier {
     for (final m in catalog) {
       if (await _complete(m)) _installed.add(m.id);
     }
+    _speakersInstalled = await _speakersComplete();
     notifyListeners();
   }
 
@@ -210,22 +336,48 @@ class ModelStore extends ChangeNotifier {
     return ok(_vadPath, vad.size);
   }
 
+  List<(ModelFile, String)> get _speakerFiles => [
+        (speakerSegmentation, _path('speakers', speakerSegmentation)),
+        (speakerEmbedding, _path('speakers', speakerEmbedding)),
+      ];
+
+  Future<bool> _speakersComplete() async {
+    for (final (f, path) in _speakerFiles) {
+      final file = File(path);
+      if (!await file.exists() || await file.length() != f.size) return false;
+    }
+    return true;
+  }
+
+  /// The speaker models, once downloaded.
+  InstalledSpeakerModels? installedSpeakers() => _speakersInstalled
+      ? InstalledSpeakerModels(_speakerFiles[0].$2, _speakerFiles[1].$2)
+      : null;
+
   InstalledModel? installed(String id) {
     final m = byId(id);
     if (m == null || !isInstalled(id)) return null;
-    return InstalledModel(m, _modelPath(m, m.encoder), _modelPath(m, m.decoder),
-        _modelPath(m, m.tokens), _vadPath);
+    final decoder = m.decoder;
+    return InstalledModel(
+        m,
+        _modelPath(m, m.encoder),
+        decoder == null ? '' : _modelPath(m, decoder),
+        _modelPath(m, m.tokens),
+        _vadPath);
   }
 
   /// Downloads every missing file of [id]. Returns an error message, or null
   /// when the model is installed (or the download was cancelled).
   Future<String?> download(String id) async {
+    final speakers = id == speakerModelsId;
     final m = byId(id);
-    if (m == null || _downloading != null) return null;
-    final todo = <(ModelFile, String)>[
-      for (final f in m.files) (f, _modelPath(m, f)),
-      (vad, _vadPath),
-    ];
+    if ((m == null && !speakers) || _downloading != null) return null;
+    final todo = speakers
+        ? _speakerFiles
+        : <(ModelFile, String)>[
+            for (final f in m!.files) (f, _modelPath(m, f)),
+            (vad, _vadPath),
+          ];
     _downloading = id;
     _error = null;
     _cancel = false;
@@ -237,7 +389,11 @@ class ModelStore extends ChangeNotifier {
       for (final (f, path) in todo) {
         await _fetch(client, f, path);
       }
-      _installed.add(id);
+      if (speakers) {
+        _speakersInstalled = true;
+      } else {
+        _installed.add(id);
+      }
       await _excludeFromBackup(_root.path);
       return null;
     } on _Cancelled {
@@ -323,6 +479,13 @@ class ModelStore extends ChangeNotifier {
 
   /// Removes [id]'s files. The voice detection file goes with the last model.
   Future<void> delete(String id) async {
+    if (id == speakerModelsId) {
+      final dir = Directory(p.join(_root.path, 'speakers'));
+      if (await dir.exists()) await dir.delete(recursive: true);
+      _speakersInstalled = false;
+      notifyListeners();
+      return;
+    }
     final m = byId(id);
     if (m == null) return;
     final dir = Directory(p.join(_root.path, m.id));

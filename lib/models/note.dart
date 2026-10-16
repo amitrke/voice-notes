@@ -20,6 +20,9 @@ class Segment {
   /// Timestamped text, when the provider gave it; empty otherwise.
   final List<TimedLine> lines;
 
+  /// False once the audio was deleted after transcription; the text stays.
+  bool get hasAudio => audioPath.isNotEmpty;
+
   const Segment({
     this.id,
     this.noteId,
@@ -45,12 +48,13 @@ class Segment {
     String? error,
     bool clearError = false,
     List<TimedLine>? lines,
+    String? audioPath,
   }) =>
       Segment(
         id: id ?? this.id,
         noteId: noteId ?? this.noteId,
         position: position ?? this.position,
-        audioPath: audioPath,
+        audioPath: audioPath ?? this.audioPath,
         transcript: transcript ?? this.transcript,
         english: english ?? this.english,
         languageCode: languageCode ?? this.languageCode,
@@ -137,6 +141,12 @@ class Note {
   /// from; null if they never were.
   final String? enrichedHash;
 
+  /// The folder the note is filed in; null = not in any folder.
+  final int? folderId;
+
+  /// Names the user gave to speaker ids ("S1" -> "Dr. Rao").
+  final Map<String, String> speakerNames;
+
   const Note({
     this.id,
     this.title = '',
@@ -151,7 +161,27 @@ class Note {
     this.error,
     this.clinical,
     this.enrichedHash,
+    this.folderId,
+    this.speakerNames = const {},
   });
+
+  /// Ids of the speakers heard in the note, in order of first appearance.
+  List<String> get speakerIds => {
+        for (final s in segments)
+          for (final l in s.lines)
+            if (l.speaker != null) l.speaker!,
+      }.toList();
+
+  /// What to call speaker [id]: the user's name for them, else "Speaker 1".
+  String speakerLabel(String id) {
+    final named = speakerNames[id]?.trim() ?? '';
+    if (named.isNotEmpty) return named;
+    final number = RegExp(r'\d+').firstMatch(id)?.group(0);
+    final index = number != null
+        ? int.parse(number)
+        : speakerIds.indexOf(id) + 1;
+    return 'Speaker $index';
+  }
 
   /// First recording's file (also kept in the legacy `audio_path` column).
   String get audioPath => segments.isEmpty ? '' : segments.first.audioPath;
@@ -209,6 +239,9 @@ class Note {
     String? provider,
     ClinicalReport? clinical,
     String? enrichedHash,
+    int? folderId,
+    bool clearFolder = false,
+    Map<String, String>? speakerNames,
   }) =>
       Note(
         id: id ?? this.id,
@@ -224,6 +257,8 @@ class Note {
         error: error,
         clinical: clinical ?? this.clinical,
         enrichedHash: enrichedHash ?? this.enrichedHash,
+        folderId: clearFolder ? null : (folderId ?? this.folderId),
+        speakerNames: speakerNames ?? this.speakerNames,
       );
 
   /// Replaces [segments] and re-derives the joined text, language and status.
@@ -243,6 +278,8 @@ class Note {
       error: c.error,
       clinical: clinical,
       enrichedHash: enrichedHash,
+      folderId: folderId,
+      speakerNames: speakerNames,
     );
   }
 
@@ -262,6 +299,8 @@ class Note {
         'error': error,
         'clinical': clinical == null ? null : jsonEncode(clinical!.toJson()),
         'enriched_hash': enrichedHash,
+        'folder_id': folderId,
+        'speakers': speakerNames.isEmpty ? null : jsonEncode(speakerNames),
       };
 
   factory Note.fromMap(Map<String, Object?> m,
@@ -283,7 +322,21 @@ class Note {
         error: m['error'] as String?,
         clinical: _clinicalFrom(m['clinical'] as String?),
         enrichedHash: m['enriched_hash'] as String?,
+        folderId: m['folder_id'] as int?,
+        speakerNames: _namesFrom(m['speakers'] as String?),
       );
+
+  static Map<String, String> _namesFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      return {
+        for (final e in (jsonDecode(raw) as Map).entries)
+          e.key.toString(): e.value.toString(),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
 
   static ClinicalReport? _clinicalFrom(String? raw) {
     if (raw == null || raw.isEmpty) return null;
@@ -293,4 +346,16 @@ class Note {
       return null;
     }
   }
+}
+
+/// A named place to file notes in.
+class Folder {
+  final int? id;
+  final String name;
+  const Folder({this.id, required this.name});
+
+  Map<String, Object?> toMap() => {if (id != null) 'id': id, 'name': name};
+
+  factory Folder.fromMap(Map<String, Object?> m) =>
+      Folder(id: m['id'] as int?, name: (m['name'] as String?) ?? '');
 }

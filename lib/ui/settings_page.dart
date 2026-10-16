@@ -6,6 +6,7 @@ import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
 import '../services/model_store.dart';
+import 'dictionary_page.dart';
 import 'links.dart';
 import 'text_size.dart';
 import 'theme.dart';
@@ -25,6 +26,24 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!ok) {
       messenger.showSnackBar(
           const SnackBar(content: Text('Could not open the guide: $apiKeyGuideUrl')));
+    }
+  }
+
+  /// What "Identify speakers" does with the transcription provider in use.
+  String _speakerHelp(SettingsStore s, AppState state) {
+    switch (s.active) {
+      case ProviderId.gemini:
+        return 'Gemini labels who speaks each line. Timing is approximate, so '
+            'following along may drift a little.';
+      case ProviderId.onDevice:
+        return state.settings.models.isInstalled(speakerModelsId)
+            ? 'Tells voices apart on this device. Works best with a few '
+                'people and little background noise.'
+            : 'Needs a small download (about 30 MB) below, under Offline '
+                'model.';
+      default:
+        return 'Only Gemini and On this device can tell speakers apart. '
+            '${s.active.label} will not label them.';
     }
   }
 
@@ -115,6 +134,46 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (v) async {
                     await s.setTranslate(v);
                     setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Identify speakers'),
+                  subtitle: Text(_speakerHelp(s, state)),
+                  value: s.identifySpeakers,
+                  onChanged: (v) async {
+                    await s.setIdentifySpeakers(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Delete audio after transcribing'),
+                  subtitle: const Text(
+                      'Keeps the text and removes the recording once it has '
+                      'been transcribed. Saves space; you can no longer play '
+                      'it back or transcribe it again.'),
+                  value: s.deleteAudioAfter,
+                  onChanged: (v) async {
+                    await s.setDeleteAudioAfter(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.spellcheck),
+                  title: const Text('Custom dictionary'),
+                  subtitle: Text(s.dictionary.isEmpty
+                      ? 'Names and terms to get right'
+                      : '${s.dictionary.entries.length} '
+                          '${s.dictionary.entries.length == 1 ? 'word' : 'words'}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const DictionaryPage()));
+                    if (mounted) setState(() {});
                   },
                 ),
                 const Divider(),
@@ -451,33 +510,48 @@ class _OfflineModels extends StatelessWidget {
           Text(
             'Download a model once. After that, transcription works without '
             'internet and audio stays on your phone. Wi-Fi is recommended. '
-            'Larger models are more accurate but slower. Indian languages '
-            'other than Hindi come out less accurate than with Sarvam.',
+            'Larger models are more accurate but slower. For Indian languages, '
+            'the models below the Whisper ones may do better than Whisper, '
+            'but Sarvam is still the one built for them.',
             style: muted,
           ),
           const SizedBox(height: 8),
-          for (final m in models.catalog)
-            _ModelRow(
-              model: m,
-              installed: models.isInstalled(m.id),
-              selected: selected == m.id,
-              downloading: models.downloading == m.id,
-              busy: models.downloading != null,
-              progress: models.progress,
-              onSelect: () async {
-                await store.setOfflineModel(m.id);
-                onChanged();
-              },
-              onDownload: () => _download(context, models, m.id),
-              onCancel: models.cancel,
-              onDelete: () => _delete(context, models, m),
-            ),
+          for (final m in models.catalog.where((m) => m.kind == ModelKind.whisper))
+            _modelRow(context, models, m, selected),
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 2),
+            child: Text('Indian languages',
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(color: theme.colorScheme.primary)),
+          ),
+          Text(
+            'Each model below listens in one way: the language-specific ones '
+            'transcribe only their language, and Omnilingual covers many '
+            'without naming which one it heard. None of them translate to '
+            'English. Try one on a short recording before relying on it.',
+            style: muted,
+          ),
+          for (final m in models.catalog.where((m) => m.kind != ModelKind.whisper))
+            _modelRow(context, models, m, selected),
+          const Divider(),
+          _SpeakerModelsRow(
+            installed: models.isInstalled(speakerModelsId),
+            downloading: models.downloading == speakerModelsId,
+            busy: models.downloading != null,
+            progress: models.progress,
+            onDownload: () => _download(context, models, speakerModelsId),
+            onCancel: models.cancel,
+            onDelete: () async {
+              await models.delete(speakerModelsId);
+              onChanged();
+            },
+          ),
           if (store.translate &&
               models.byId(selected)?.canTranslate == false)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'The Turbo model cannot translate to English, so notes '
+                'The selected model cannot translate to English, so notes '
                 'transcribed with it have only the original language.',
                 style: muted,
               ),
@@ -486,6 +560,24 @@ class _OfflineModels extends StatelessWidget {
       ),
     );
   }
+
+  Widget _modelRow(BuildContext context, ModelStore models, OfflineModel m,
+          String? selected) =>
+      _ModelRow(
+        model: m,
+        installed: models.isInstalled(m.id),
+        selected: selected == m.id,
+        downloading: models.downloading == m.id,
+        busy: models.downloading != null,
+        progress: models.progress,
+        onSelect: () async {
+          await store.setOfflineModel(m.id);
+          onChanged();
+        },
+        onDownload: () => _download(context, models, m.id),
+        onCancel: models.cancel,
+        onDelete: () => _delete(context, models, m),
+      );
 }
 
 class _ModelRow extends StatelessWidget {
@@ -583,6 +675,72 @@ class _ModelRow extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Download, cancel or delete the small models that tell voices apart.
+class _SpeakerModelsRow extends StatelessWidget {
+  final bool installed;
+  final bool downloading;
+  final bool busy;
+  final double progress;
+  final VoidCallback onDownload;
+  final VoidCallback onCancel;
+  final VoidCallback onDelete;
+  const _SpeakerModelsRow({
+    required this.installed,
+    required this.downloading,
+    required this.busy,
+    required this.progress,
+    required this.onDownload,
+    required this.onCancel,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final Widget action = downloading
+        ? TextButton(onPressed: onCancel, child: const Text('Cancel'))
+        : installed
+            ? IconButton(
+                tooltip: 'Delete speaker models',
+                icon: const Icon(Icons.delete_outline),
+                onPressed: onDelete,
+              )
+            : OutlinedButton(
+                onPressed: busy ? null : onDownload,
+                child: const Text('Download'),
+              );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.record_voice_over_outlined,
+                color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Speaker models · ${_size(speakerSegmentationFile.size + speakerEmbeddingFile.size)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text('Tell voices apart. Used when "Identify speakers" is on.',
+                      style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ),
+            action,
+          ],
+        ),
+        if (downloading)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(36, 8, 8, 0),
+            child: LinearProgressIndicator(value: progress),
+          ),
+      ],
     );
   }
 }

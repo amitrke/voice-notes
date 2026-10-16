@@ -24,12 +24,32 @@ batch job API returned empty transcripts for raw m4a, so it is only the fallback
 isolate. Models are not bundled: Settings downloads one (Base ~160 MB, Small ~360 MB, Turbo ~1 GB) from
 Hugging Face URLs pinned to a commit, plus Silero voice detection (~0.6 MB). Files go to the app support folder
 (excluded from iCloud backup) as `.part`, resume with Range requests, and are checked against SHA-256 before
-use (`lib/services/model_store.dart`). Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
+use (`lib/services/model_store.dart`).
+
+Indian-language models sit beside the Whisper ones in the same list: Meta's Omnilingual ASR 300M (Apache-2.0, many
+languages, ~365 MB) and AI4Bharat IndicConformer for Tamil, Telugu and Malayalam (MIT, ~137 MB each, one language
+each). They only transcribe: no language detection for Omnilingual, no English translation. The IndicConformer files
+are community conversions for sherpa-onnx (`csndhanasekar/...`), not published by AI4Bharat, and neither family has
+been run on a device yet. There is no Hindi-only model: no sherpa-ready export was found. Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
 30 s at a time); each piece is one timestamped line. It has no text model, so titles and summaries need a
 separate enrichment provider.
 
 Timestamped lines (on-device and OpenAI) drive the note screen's follow-along highlighting, tap-to-seek, and
 SRT export.
+
+### Dictionary, speakers, folders, find and replace
+
+- **Custom dictionary** (Settings): terms are sent as a hint to OpenAI (`prompt`) and Gemini, and "sounds like"
+  spellings are corrected in every new transcript with any provider (`lib/data/dictionary.dart`).
+- **Identify speakers** (Settings): Gemini returns speaker turns with approximate times; "On this device" runs
+  sherpa-onnx diarization (pyannote segmentation + a speaker embedding, about 30 MB, downloaded from Settings)
+  and labels each line by overlap (`lib/providers/speaker_assign.dart`). Speakers can be renamed per note.
+  Others (Sarvam, OpenAI) do not label speakers. Recordings over 45 minutes are not diarized on the device.
+- **Folders**: one folder per note, filter chips on the home screen. Database version 5.
+- **Find and replace** across notes (home screen), previewing the notes it will change.
+- **Delete audio after transcribing** (Settings): keeps the text, removes the file.
+- **Share to the app** (Android): audio and video shared from other apps become notes
+  (`SharedAudio.kt`, `lib/services/share_intake.dart`). iOS has no share extension yet.
 
 ### Enrichment (titles, summaries, clinical notes)
 

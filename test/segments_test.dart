@@ -14,6 +14,7 @@ import 'package:voice_notes/providers/ai_provider.dart';
 class FakeProvider implements AiProvider {
   final Map<String, Transcription> byFile;
   final transcribed = <String>[];
+  final vocabularies = <List<String>>[];
   final summarized = <String>[];
   final clinicalPrompts = <String>[];
 
@@ -25,9 +26,13 @@ class FakeProvider implements AiProvider {
   RecordingFormat get recordingFormat => RecordingFormat.m4a;
 
   @override
-  Future<Transcription> transcribe(File audio, {required bool translate}) async {
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false}) async {
     final name = p.basename(audio.path);
     transcribed.add(name);
+    vocabularies.add(vocabulary);
     final t = byFile[name];
     if (t == null) throw const ProviderException('boom');
     return t;
