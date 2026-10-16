@@ -46,6 +46,12 @@ SRT export.
   and labels each line by overlap (`lib/providers/speaker_assign.dart`). Speakers can be renamed per note.
   Others (Sarvam, OpenAI) do not label speakers. Recordings over 45 minutes are not diarized on the device.
 - **Folders**: one folder per note, filter chips on the home screen. Database version 5.
+- **Tags** (Settings > Tags): many per note, separate from folders (`tags` and `note_tags` tables, database
+  version 6, seeded with Grocery, To-do, Work, Health, Ideas). The summary prompt passes the approved tags and the
+  model picks from them; tags outside the list are dropped. If none fit it may suggest one, which is stored
+  unapproved and linked to the note but hidden until approved in Settings (rejecting deletes it). Editing a note's
+  tags by hand sets `tags_edited`, after which regenerating leaves them alone. On-device has no text model, so
+  tagging there is manual.
 - **Find and replace** across notes (home screen), previewing the notes it will change.
 - **Delete audio after transcribing** (Settings): keeps the text, removes the file.
 - **Share to the app** (Android): audio and video shared from other apps become notes

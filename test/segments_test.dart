@@ -39,7 +39,8 @@ class FakeProvider implements AiProvider {
   }
 
   @override
-  Future<NoteSummary> summarize(String text) async {
+  Future<NoteSummary> summarize(String text,
+      {List<String> tags = const []}) async {
     summarized.add(text);
     return NoteSummary('Title ${summarized.length}', 'Summary of: $text');
   }

@@ -86,7 +86,14 @@ class Transcription {
 class NoteSummary {
   final String title;
   final String summary;
-  const NoteSummary(this.title, this.summary);
+
+  /// Tags picked from the approved list the model was given.
+  final List<String> tags;
+
+  /// A new tag the model proposes when none of the approved ones fit.
+  final String? suggestedTag;
+  const NoteSummary(this.title, this.summary,
+      {this.tags = const [], this.suggestedTag});
 }
 
 class ProviderException implements Exception {
@@ -109,8 +116,9 @@ abstract class AiProvider {
       List<String> vocabulary = const [],
       bool speakers = false});
 
-  /// Produces a short title and summary for [text].
-  Future<NoteSummary> summarize(String text);
+  /// Produces a short title and summary for [text]. With [tags] (the user's
+  /// approved tags), also picks the ones that fit; see [summaryPrompt].
+  Future<NoteSummary> summarize(String text, {List<String> tags = const []});
 
   /// Sends [prompt] to the provider's text model and returns the raw reply,
   /// which the prompt asks to be a JSON object.
@@ -191,10 +199,25 @@ Future<ClinicalReport> buildClinicalReport(
   return ClinicalReport.fromJson(extractJsonObject(reply));
 }
 
-const summaryPrompt =
-    'You title and summarise voice notes. Reply with JSON only, in the form '
-    '{"title": "<max 6 words>", "summary": "<1-3 sentences>"}. Write the title '
-    'and summary in English.\n\nVoice note:\n';
+/// The prompt every text provider uses to title and summarise [text], and,
+/// when the user has approved [tags], to tag it from that list.
+String summaryPrompt(String text, {List<String> tags = const []}) {
+  if (tags.isEmpty) {
+    return 'You title and summarise voice notes. Reply with JSON only, in the '
+        'form {"title": "<max 6 words>", "summary": "<1-3 sentences>"}. Write '
+        'the title and summary in English.\n\nVoice note:\n$text';
+  }
+  return 'You title, summarise and tag voice notes. Reply with JSON only, in '
+      'the form {"title": "<max 6 words>", "summary": "<1-3 sentences>", '
+      '"tags": ["..."], "suggested_tag": "<tag or empty>"}. Write the title '
+      'and summary in English.\n'
+      '- "tags": every tag from this list that fits the note, spelled exactly '
+      'as given, or an empty list: ${jsonEncode(tags)}. Never use a tag that '
+      'is not in the list.\n'
+      '- "suggested_tag": only if no tag in the list fits, one short new tag '
+      '(1-2 words, English, like the ones in the list); otherwise an empty '
+      'string.\n\nVoice note:\n$text';
+}
 
 /// Pulls the first JSON object out of an LLM reply, tolerating code fences
 /// and reasoning preambles.
@@ -213,11 +236,34 @@ Map<String, dynamic> extractJsonObject(String reply) {
   return decoded;
 }
 
-NoteSummary summaryFromReply(String reply) {
+/// Parses the reply to [summaryPrompt]. Tags not in [allowed] are dropped
+/// (matched ignoring case, returned with the user's spelling). A suggested
+/// tag that is already in [allowed] counts as a chosen tag instead.
+NoteSummary summaryFromReply(String reply,
+    {List<String> allowed = const []}) {
   final j = extractJsonObject(reply);
+  final byKey = {for (final t in allowed) t.trim().toLowerCase(): t};
+  final raw = j['tags'];
+  final tags = <String>{
+    if (raw is List)
+      for (final t in raw) ?byKey[t.toString().trim().toLowerCase()],
+  };
+  String? suggested;
+  final s = j['suggested_tag'];
+  if (allowed.isNotEmpty && s is String) {
+    final name = s.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final known = byKey[name.toLowerCase()];
+    if (known != null) {
+      tags.add(known);
+    } else if (name.isNotEmpty && name.length <= 30 && tags.isEmpty) {
+      suggested = name;
+    }
+  }
   return NoteSummary(
     (j['title'] ?? '').toString().trim(),
     (j['summary'] ?? '').toString().trim(),
+    tags: tags.toList(),
+    suggestedTag: suggested,
   );
 }
 

@@ -11,6 +11,7 @@ import 'format.dart';
 import 'note_page.dart';
 import 'replace_page.dart';
 import 'settings_page.dart';
+import 'tags.dart';
 import 'theme.dart';
 
 class HomePage extends StatelessWidget {
@@ -87,6 +88,8 @@ class HomePage extends StatelessWidget {
               ),
             ),
           if (state.hasAnyNotes) const _FolderBar(),
+          if (state.hasAnyNotes && state.approvedTags.isNotEmpty)
+            const _TagBar(),
           Expanded(
             child: notes.isEmpty
                 ? _Empty(searching: state.hasAnyNotes)
@@ -105,6 +108,7 @@ class HomePage extends StatelessWidget {
                                   .firstOrNull
                                   ?.name
                               : null,
+                          tags: [for (final t in state.tagsOf(n)) t.name],
                           showLanguage:
                               languageLabel(n.languageCode) != usualLanguage,
                         ),
@@ -325,16 +329,56 @@ class _FolderBar extends StatelessWidget {
   }
 }
 
+/// Chips to narrow the list to notes with one tag. Tags are managed in
+/// Settings.
+class _TagBar extends StatelessWidget {
+  const _TagBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        children: [
+          for (final t in state.approvedTags)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                avatar: state.tagFilter == t.id
+                    ? null
+                    : const Icon(Icons.sell_outlined, size: 16),
+                label: Text(t.name),
+                selected: state.tagFilter == t.id,
+                onSelected: (on) => state.tagFilter = on ? t.id : null,
+              ),
+            ),
+          ActionChip(
+            avatar: const Icon(Icons.tune, size: 18),
+            label: const Text('Tags'),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const TagsPage())),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _NoteCard extends StatelessWidget {
   final Note note;
   final bool showLanguage;
   final String query;
   final String? folderName;
+  final List<String> tags;
   const _NoteCard({
     required this.note,
     required this.showLanguage,
     this.query = '',
     this.folderName,
+    this.tags = const [],
   });
 
   @override
@@ -360,6 +404,7 @@ class _NoteCard extends StatelessWidget {
       formatTime(note.createdAt),
       if (note.durationMs != null) formatDuration(note.durationMs!),
       ?folderName,
+      ...tags.map((t) => '#$t'),
     ].join(' · ');
     final segments = note.segments;
     final done = segments

@@ -103,7 +103,9 @@ class OnDeviceProvider implements AiProvider {
   }
 
   @override
-  Future<NoteSummary> summarize(String text) => throw _noText;
+  Future<NoteSummary> summarize(String text,
+          {List<String> tags = const []}) =>
+      throw _noText;
 
   @override
   Future<String> completeJson(String prompt) => throw _noText;

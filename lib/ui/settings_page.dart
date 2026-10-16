@@ -8,6 +8,7 @@ import '../providers/ai_provider.dart';
 import '../services/model_store.dart';
 import 'dictionary_page.dart';
 import 'links.dart';
+import 'tags.dart';
 import 'text_size.dart';
 import 'theme.dart';
 
@@ -175,6 +176,20 @@ class _SettingsPageState extends State<SettingsPage> {
                             builder: (_) => const DictionaryPage()));
                     if (mounted) setState(() {});
                   },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.sell_outlined),
+                  title: const Text('Tags'),
+                  subtitle: Text(state.suggestedTags.isNotEmpty
+                      ? '${state.suggestedTags.length} suggested, waiting for '
+                          'your approval'
+                      : '${state.approvedTags.length} '
+                          '${state.approvedTags.length == 1 ? 'tag' : 'tags'}'
+                          ', picked automatically when a note is summarised'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const TagsPage())),
                 ),
                 const Divider(),
                 SwitchListTile(

@@ -27,8 +27,10 @@ class AppState extends ChangeNotifier {
 
   List<Note> _notes = [];
   List<Folder> _folders = [];
+  List<Tag> _tags = [];
   String _query = '';
   int? _folder;
+  int? _tag;
 
   /// Choice for [folderFilter] that shows only notes in no folder.
   static const unfiled = -1;
@@ -43,9 +45,34 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Every tag, approved or suggested, by name.
+  List<Tag> get tags => List.unmodifiable(_tags);
+
+  /// The tags notes can carry and the model may choose from.
+  List<Tag> get approvedTags => _tags.where((t) => t.approved).toList();
+
+  /// Tags the model proposed that wait for the user's approval.
+  List<Tag> get suggestedTags => _tags.where((t) => !t.approved).toList();
+
+  /// Which notes the list shows: null = any tag, or a tag id.
+  int? get tagFilter => _tag;
+
+  set tagFilter(int? v) {
+    _tag = v;
+    notifyListeners();
+  }
+
+  /// The note's approved tags, by name. A suggestion still waiting for
+  /// approval is not shown.
+  List<Tag> tagsOf(Note n) =>
+      approvedTags.where((t) => n.tagIds.contains(t.id)).toList();
+
+  int noteCountTagged(int tagId) =>
+      _notes.where((n) => n.tagIds.contains(tagId)).length;
+
   String get query => _query;
 
-  /// Notes in the chosen folder that match the search text.
+  /// Notes in the chosen folder and tag that match the search text.
   List<Note> get notes {
     final q = _query.trim().toLowerCase();
     return _notes.where((n) {
@@ -53,6 +80,7 @@ class AppState extends ChangeNotifier {
       if (_folder != null && _folder != unfiled && n.folderId != _folder) {
         return false;
       }
+      if (_tag != null && !n.tagIds.contains(_tag)) return false;
       if (q.isEmpty) return true;
       return n.title.toLowerCase().contains(q) ||
           n.summary.toLowerCase().contains(q) ||
@@ -96,6 +124,7 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     _notes = await db.all();
     _folders = await db.folders();
+    _tags = await db.tags();
     // Anything left "processing" by a previous run was interrupted.
     for (final n in _notes.toList()) {
       if (!n.segments.any((s) => s.status == NoteStatus.processing)) continue;
@@ -192,6 +221,119 @@ class AppState extends ChangeNotifier {
       noteId,
       (n) =>
           folderId == null ? n.copyWith(clearFolder: true) : n.copyWith(folderId: folderId));
+
+  // ---- Tags -----------------------------------------------------------------
+
+  Tag? _tagNamed(String name) {
+    final key = name.trim().toLowerCase();
+    return _tags.where((t) => t.name.toLowerCase() == key).firstOrNull;
+  }
+
+  void _sortTags() =>
+      _tags.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+  /// Adds an approved tag. A tag of that name that was only suggested is
+  /// approved instead; an existing one is returned as it is.
+  Future<Tag?> createTag(String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return null;
+    final existing = _tagNamed(n);
+    if (existing != null) {
+      if (!existing.approved) await approveTag(existing.id!);
+      return _tagNamed(n);
+    }
+    final t = await db.insertTag(n);
+    _tags = [..._tags, t];
+    _sortTags();
+    notifyListeners();
+    return t;
+  }
+
+  /// Renames the tag; false when another tag already has that name.
+  Future<bool> renameTag(int id, String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return false;
+    final clash = _tagNamed(n);
+    if (clash != null && clash.id != id) return false;
+    final cur = _tags.where((t) => t.id == id).firstOrNull;
+    if (cur == null) return false;
+    final next = Tag(id: id, name: n, approved: cur.approved);
+    await db.updateTag(next);
+    _tags = [for (final t in _tags) t.id == id ? next : t];
+    _sortTags();
+    notifyListeners();
+    return true;
+  }
+
+  /// Approves a suggested tag. Notes it was suggested for show it from now on.
+  Future<void> approveTag(int id) async {
+    final cur = _tags.where((t) => t.id == id).firstOrNull;
+    if (cur == null || cur.approved) return;
+    final next = Tag(id: id, name: cur.name);
+    await db.updateTag(next);
+    _tags = [for (final t in _tags) t.id == id ? next : t];
+    notifyListeners();
+  }
+
+  /// Deletes the tag (or rejects a suggestion) and takes it off every note.
+  Future<void> deleteTag(int id) async {
+    await db.deleteTag(id);
+    _tags = _tags.where((t) => t.id != id).toList();
+    _notes = [
+      for (final n in _notes)
+        n.tagIds.contains(id)
+            ? n.copyWith(tagIds: n.tagIds.where((t) => t != id).toList())
+            : n,
+    ];
+    if (_tag == id) _tag = null;
+    notifyListeners();
+  }
+
+  /// The user's choice of tags for the note. From now on enrichment no longer
+  /// changes them, and a pending suggestion is dropped from the note.
+  Future<void> setNoteTags(int noteId, Iterable<int> tagIds) async {
+    final approved = {for (final t in approvedTags) t.id};
+    final ids = tagIds.where(approved.contains).toSet().toList();
+    await db.setNoteTags(noteId, ids);
+    await _edit(noteId, (n) => n.copyWith(tagIds: ids, tagsEdited: true));
+  }
+
+  /// Adds or removes one tag by hand; see [setNoteTags].
+  Future<void> toggleNoteTag(int noteId, int tagId) async {
+    final n = byId(noteId);
+    if (n == null) return;
+    final visible = tagsOf(n).map((t) => t.id!).toSet();
+    if (!visible.remove(tagId)) visible.add(tagId);
+    await setNoteTags(noteId, visible);
+  }
+
+  /// The approved tag names enrichment may choose from.
+  List<String> get _tagNames => [for (final t in approvedTags) t.name];
+
+  /// Applies the tags enrichment chose, unless the user has edited the note's
+  /// tags by hand. A suggested new tag is stored unapproved and linked to the
+  /// note, so approving it later tags the note without asking the model again.
+  Future<void> _applyTags(int noteId, NoteSummary s) async {
+    if (byId(noteId)?.tagsEdited ?? true) return;
+    final ids = <int>[
+      for (final name in s.tags)
+        if (_tagNamed(name) case final Tag t when t.approved) t.id!,
+    ];
+    final suggested = s.suggestedTag;
+    if (suggested != null) {
+      var t = _tagNamed(suggested);
+      if (t == null) {
+        t = await db.insertTag(suggested, approved: false);
+        _tags = [..._tags, t];
+        _sortTags();
+      }
+      ids.add(t.id!);
+    }
+    // The user may have edited the tags while the model was answering.
+    if (byId(noteId)?.tagsEdited ?? true) return;
+    await db.setNoteTags(noteId, ids);
+    await _edit(noteId, (n) => n.copyWith(tagIds: ids.toSet().toList()));
+  }
 
   // ---- Speakers -------------------------------------------------------------
 
@@ -392,7 +534,7 @@ class AppState extends ChangeNotifier {
     if (note == null) return;
     try {
       final source = note.english.isNotEmpty ? note.english : note.transcript;
-      final s = await provider.summarize(source);
+      final s = await provider.summarize(source, tags: _tagNames);
       await _edit(
           noteId,
           (n) => n.copyWith(
@@ -400,6 +542,7 @@ class AppState extends ChangeNotifier {
                 summary: s.summary,
                 enrichedHash: textHash(note.transcript, note.english),
               ));
+      await _applyTags(noteId, s);
     } catch (_) {
       // The transcript is the valuable part; a failed summary is not fatal.
     }
@@ -441,7 +584,7 @@ class AppState extends ChangeNotifier {
     if (provider == null || !settings.textActive.canText) return _noTextProvider;
     try {
       final source = n.english.isNotEmpty ? n.english : n.transcript;
-      final s = await provider.summarize(source);
+      final s = await provider.summarize(source, tags: _tagNames);
       final report = n.clinical == null
           ? null
           : await buildClinicalReport(
@@ -460,6 +603,7 @@ class AppState extends ChangeNotifier {
                 // a recording landed meanwhile the note stays out of date.
                 enrichedHash: textHash(n.transcript, n.english),
               ));
+      await _applyTags(id, s);
       return null;
     } catch (e) {
       return _describe(e);
