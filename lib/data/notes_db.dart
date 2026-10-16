@@ -27,11 +27,28 @@ const _foldersTable = '''
     name TEXT NOT NULL
   )''';
 
+const _tagsTable = '''
+  CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    approved INTEGER NOT NULL DEFAULT 1
+  )''';
+
+const _noteTagsTable = '''
+  CREATE TABLE IF NOT EXISTS note_tags (
+    note_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (note_id, tag_id)
+  )''';
+
+/// Tags a new install starts with; the user can rename or delete them.
+const starterTags = ['Grocery', 'To-do', 'Work', 'Health', 'Ideas'];
+
 class NotesDb {
   final Database _db;
   NotesDb._(this._db);
 
-  static const version = 5;
+  static const version = 6;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi.
@@ -59,10 +76,12 @@ class NotesDb {
               clinical TEXT,
               enriched_hash TEXT,
               folder_id INTEGER,
-              speakers TEXT
+              speakers TEXT,
+              tags_edited INTEGER NOT NULL DEFAULT 0
             )''');
           await db.execute(_segmentsTable);
           await db.execute(_foldersTable);
+          await _addTags(db);
         },
         onUpgrade: (db, from, _) async {
           if (from < 2) await _addColumn(db, 'notes', 'clinical');
@@ -72,6 +91,11 @@ class NotesDb {
             await _addColumn(db, 'notes', 'folder_id', type: 'INTEGER');
             await _addColumn(db, 'notes', 'speakers');
             await db.execute(_foldersTable);
+          }
+          if (from < 6) {
+            await _addColumn(db, 'notes', 'tags_edited',
+                type: 'INTEGER NOT NULL DEFAULT 0');
+            await _addTags(db);
           }
         },
       ),
@@ -85,6 +109,16 @@ class NotesDb {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == name)) return;
     await db.execute('ALTER TABLE $table ADD COLUMN $name $type');
+  }
+
+  /// v6: tag tables, seeded with [starterTags].
+  static Future<void> _addTags(Database db) async {
+    await db.execute(_tagsTable);
+    await db.execute(_noteTagsTable);
+    for (final name in starterTags) {
+      await db.insert('tags', {'name': name, 'approved': 1},
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
   }
 
   /// v3: every existing note becomes a note with one recording, and its
@@ -123,8 +157,14 @@ class NotesDb {
     for (final s in segs.map(Segment.fromMap)) {
       byNote.putIfAbsent(s.noteId!, () => []).add(s);
     }
+    final links = await _db.query('note_tags', orderBy: 'note_id, tag_id');
+    final tagsByNote = <int, List<int>>{};
+    for (final l in links) {
+      tagsByNote.putIfAbsent(l['note_id'] as int, () => []).add(l['tag_id'] as int);
+    }
     return rows
-        .map((r) => Note.fromMap(r, byNote[r['id'] as int] ?? const []))
+        .map((r) => Note.fromMap(r, byNote[r['id'] as int] ?? const [],
+            tagsByNote[r['id'] as int] ?? const []))
         .toList();
   }
 
@@ -160,6 +200,7 @@ class NotesDb {
 
   Future<void> delete(int id) => _db.transaction((txn) async {
         await txn.delete('segments', where: 'note_id = ?', whereArgs: [id]);
+        await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [id]);
         await txn.delete('notes', where: 'id = ?', whereArgs: [id]);
       });
 
@@ -179,6 +220,34 @@ class NotesDb {
         await txn.update('notes', {'folder_id': null},
             where: 'folder_id = ?', whereArgs: [id]);
         await txn.delete('folders', where: 'id = ?', whereArgs: [id]);
+      });
+
+  Future<List<Tag>> tags() async =>
+      (await _db.query('tags', orderBy: 'name COLLATE NOCASE'))
+          .map(Tag.fromMap)
+          .toList();
+
+  Future<Tag> insertTag(String name, {bool approved = true}) async {
+    final t = Tag(name: name, approved: approved);
+    return Tag(id: await _db.insert('tags', t.toMap()), name: name, approved: approved);
+  }
+
+  Future<void> updateTag(Tag t) =>
+      _db.update('tags', t.toMap(), where: 'id = ?', whereArgs: [t.id]);
+
+  /// Removes the tag from every note, then the tag itself.
+  Future<void> deleteTag(int id) => _db.transaction((txn) async {
+        await txn.delete('note_tags', where: 'tag_id = ?', whereArgs: [id]);
+        await txn.delete('tags', where: 'id = ?', whereArgs: [id]);
+      });
+
+  /// Replaces the note's tags with [tagIds].
+  Future<void> setNoteTags(int noteId, Iterable<int> tagIds) =>
+      _db.transaction((txn) async {
+        await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [noteId]);
+        for (final t in tagIds.toSet()) {
+          await txn.insert('note_tags', {'note_id': noteId, 'tag_id': t});
+        }
       });
 
   Future<void> close() => _db.close();

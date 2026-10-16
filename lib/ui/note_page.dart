@@ -17,6 +17,7 @@ import 'clinical_page.dart';
 import 'folders.dart';
 import 'format.dart';
 import 'stale_banner.dart';
+import 'tags.dart';
 import 'text_size.dart';
 import 'theme.dart';
 
@@ -201,6 +202,8 @@ class _NotePageState extends State<NotePage> {
                 await _exportSrt(note, english: showEnglish);
               } else if (v == 'folder') {
                 await moveNoteToFolder(context, note);
+              } else if (v == 'tags') {
+                await editNoteTags(context, note.id!);
               } else if (v == 'speakers') {
                 await _nameSpeakers(state, note.id!);
               }
@@ -223,6 +226,7 @@ class _NotePageState extends State<NotePage> {
                     value: 'speakers', child: Text('Name the speakers')),
               const PopupMenuItem(
                   value: 'folder', child: Text('Move to folder')),
+              const PopupMenuItem(value: 'tags', child: Text('Edit tags')),
               if (note.segments.any((s) => s.hasAudio))
                 const PopupMenuItem(
                     value: 'retry', child: Text('Transcribe again')),
@@ -299,7 +303,9 @@ class _NotePageState extends State<NotePage> {
                   ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          NoteTags(note: note),
+          const SizedBox(height: 12),
           if (note.isStale && note.status != NoteStatus.processing) ...[
             StaleBanner(
               message: note.clinical != null

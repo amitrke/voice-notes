@@ -211,8 +211,10 @@ class SarvamProvider implements AiProvider {
   // ---- Text model ----------------------------------------------------------
 
   @override
-  Future<NoteSummary> summarize(String text) async =>
-      summaryFromReply(await completeJson('$summaryPrompt$text'));
+  Future<NoteSummary> summarize(String text,
+          {List<String> tags = const []}) async =>
+      summaryFromReply(await completeJson(summaryPrompt(text, tags: tags)),
+          allowed: tags);
 
   @override
   Future<String> completeJson(String prompt) async {

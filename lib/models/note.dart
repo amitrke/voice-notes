@@ -147,6 +147,14 @@ class Note {
   /// Names the user gave to speaker ids ("S1" -> "Dr. Rao").
   final Map<String, String> speakerNames;
 
+  /// Ids of the note's tags, including a suggested tag that is still waiting
+  /// for approval (screens show only approved ones). Stored in `note_tags`.
+  final List<int> tagIds;
+
+  /// True once the user added or removed a tag by hand; from then on
+  /// enrichment leaves the note's tags alone.
+  final bool tagsEdited;
+
   const Note({
     this.id,
     this.title = '',
@@ -163,6 +171,8 @@ class Note {
     this.enrichedHash,
     this.folderId,
     this.speakerNames = const {},
+    this.tagIds = const [],
+    this.tagsEdited = false,
   });
 
   /// Ids of the speakers heard in the note, in order of first appearance.
@@ -242,6 +252,8 @@ class Note {
     int? folderId,
     bool clearFolder = false,
     Map<String, String>? speakerNames,
+    List<int>? tagIds,
+    bool? tagsEdited,
   }) =>
       Note(
         id: id ?? this.id,
@@ -259,6 +271,8 @@ class Note {
         enrichedHash: enrichedHash ?? this.enrichedHash,
         folderId: clearFolder ? null : (folderId ?? this.folderId),
         speakerNames: speakerNames ?? this.speakerNames,
+        tagIds: tagIds ?? this.tagIds,
+        tagsEdited: tagsEdited ?? this.tagsEdited,
       );
 
   /// Replaces [segments] and re-derives the joined text, language and status.
@@ -280,6 +294,8 @@ class Note {
       enrichedHash: enrichedHash,
       folderId: folderId,
       speakerNames: speakerNames,
+      tagIds: tagIds,
+      tagsEdited: tagsEdited,
     );
   }
 
@@ -301,10 +317,11 @@ class Note {
         'enriched_hash': enrichedHash,
         'folder_id': folderId,
         'speakers': speakerNames.isEmpty ? null : jsonEncode(speakerNames),
+        'tags_edited': tagsEdited ? 1 : 0,
       };
 
   factory Note.fromMap(Map<String, Object?> m,
-          [List<Segment> segments = const []]) =>
+          [List<Segment> segments = const [], List<int> tagIds = const []]) =>
       Note(
         id: m['id'] as int?,
         title: (m['title'] as String?) ?? '',
@@ -324,6 +341,8 @@ class Note {
         enrichedHash: m['enriched_hash'] as String?,
         folderId: m['folder_id'] as int?,
         speakerNames: _namesFrom(m['speakers'] as String?),
+        tagIds: tagIds,
+        tagsEdited: (m['tags_edited'] as int?) == 1,
       );
 
   static Map<String, String> _namesFrom(String? raw) {
@@ -358,4 +377,22 @@ class Folder {
 
   factory Folder.fromMap(Map<String, Object?> m) =>
       Folder(id: m['id'] as int?, name: (m['name'] as String?) ?? '');
+}
+
+/// A label for notes. Tags the model suggests start unapproved and stay
+/// hidden until the user approves them in Settings.
+class Tag {
+  final int? id;
+  final String name;
+  final bool approved;
+  const Tag({this.id, required this.name, this.approved = true});
+
+  Map<String, Object?> toMap() =>
+      {if (id != null) 'id': id, 'name': name, 'approved': approved ? 1 : 0};
+
+  factory Tag.fromMap(Map<String, Object?> m) => Tag(
+        id: m['id'] as int?,
+        name: (m['name'] as String?) ?? '',
+        approved: (m['approved'] as int?) == 1,
+      );
 }

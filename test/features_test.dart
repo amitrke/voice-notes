@@ -44,7 +44,8 @@ class _Provider implements AiProvider {
   }
 
   @override
-  Future<NoteSummary> summarize(String text) async =>
+  Future<NoteSummary> summarize(String text,
+          {List<String> tags = const []}) async =>
       NoteSummary('Title', 'Summary of: $text');
 
   @override
