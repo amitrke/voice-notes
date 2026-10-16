@@ -149,8 +149,20 @@ final offlineModels = <OfflineModel>[
       'a7a044c52cb29cbe8b0dc1953e92cefd4ca16b0ed968177b6beab21f9a7d0b31',
     ),
   ),
-  // AI4Bharat IndicConformer (MIT), converted for sherpa-onnx by a community
-  // contributor (not by AI4Bharat). Each model speaks one language.
+  // AI4Bharat IndicConformer (MIT), converted for sherpa-onnx by community
+  // contributors (not by AI4Bharat). Each model speaks one language.
+  // The Hindi conversion (CC-BY-4.0, ngiftsun) quantizes only the MatMul
+  // layers: its author measured fewer dropped words on fast Hinglish than with
+  // the smaller all-int8 file. Its tokens cover every Indic script, but the
+  // model writes Devanagari.
+  _indic('hi', 'Hindi', '7c3806fe01eb9b50784f09fe22cfeabf642c218e',
+      '0782be8f731c97cb212d5416390e5c8129afec56ae0b2a785cb641cb13d12575',
+      197677836, 67605,
+      'ee60967630213f31951817ac8b402b92ec18cce80718a24a49b388e56672dfb2',
+      owner: 'ngiftsun',
+      repo: 'indicconformer-hi-int8-sherpa',
+      modelFile: 'model.int8-matmul.onnx',
+      converter: 'ngiftsun'),
   _indic('ta', 'Tamil', 'a41ba03ed8e489eda5e108cb49099b7c9cf83e8b',
       'dfedd42ca1a143fa0f08808b6b5d8f03d1a86e904d68375b335e39417128c0de',
       137563718, 3299,
@@ -166,25 +178,30 @@ final offlineModels = <OfflineModel>[
 ];
 
 OfflineModel _indic(String code, String name, String commit, String modelSha,
-        int modelSize, int tokensSize, String tokensSha) =>
+        int modelSize, int tokensSize, String tokensSha,
+        {String owner = 'csndhanasekar',
+        String? repo,
+        String modelFile = 'model.int8.onnx',
+        String converter = 'a community contributor'}) =>
     OfflineModel(
       id: 'indic-$code',
       label: '$name only (IndicConformer)',
       blurb: 'Made for $name only, so it cannot detect other languages or '
-          'translate. AI4Bharat model, converted by a community contributor.',
+          'translate. AI4Bharat model, converted by $converter.',
       kind: ModelKind.nemoCtc,
       language: code,
       encoder: ModelFile(
         'model.int8.onnx',
-        _hf('sherpa-onnx-indicconformer-$code-int8', commit, 'model.int8.onnx',
-            owner: 'csndhanasekar'),
+        _hf(repo ?? 'sherpa-onnx-indicconformer-$code-int8', commit, modelFile,
+            owner: owner),
         modelSize,
         modelSha,
       ),
       tokens: ModelFile(
         'tokens.txt',
-        _hf('sherpa-onnx-indicconformer-$code-int8', commit, 'tokens.txt',
-            owner: 'csndhanasekar'),
+        _hf(repo ?? 'sherpa-onnx-indicconformer-$code-int8', commit,
+            'tokens.txt',
+            owner: owner),
         tokensSize,
         tokensSha,
       ),
