@@ -26,6 +26,15 @@ const modelDefaults = {
   ProviderId.onDevice: ModelDefaults('', ''),
 };
 
+/// What the user records, which decides the extra features offered.
+enum UseCase {
+  general('General notes'),
+  clinical('Clinical work');
+
+  final String label;
+  const UseCase(this.label);
+}
+
 /// API keys live in the platform keystore/keychain; everything else in
 /// SharedPreferences. Values are cached in memory after [load].
 class SettingsStore {
@@ -48,8 +57,11 @@ class SettingsStore {
   ProviderId? enrichment;
   bool translate = true;
   bool autoSummary = true;
-  bool clinical = false;
+  UseCase useCase = UseCase.general;
   double textScale = defaultTextScale;
+
+  /// Adds the clinical note to transcripts.
+  bool get clinical => useCase == UseCase.clinical;
 
   /// Remove a recording's audio file once its text has been saved.
   bool deleteAudioAfter = false;
@@ -73,7 +85,13 @@ class SettingsStore {
     enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
-    clinical = _prefs.getBool('clinical') ?? false;
+    // Before use cases, clinical mode was a plain on/off setting.
+    useCase = UseCase.values
+            .where((u) => u.name == _prefs.getString('useCase'))
+            .firstOrNull ??
+        ((_prefs.getBool('clinical') ?? false)
+            ? UseCase.clinical
+            : UseCase.general);
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -166,9 +184,9 @@ class SettingsStore {
     await _prefs.setDouble('textScale', textScale);
   }
 
-  Future<void> setClinical(bool v) async {
-    clinical = v;
-    await _prefs.setBool('clinical', v);
+  Future<void> setUseCase(UseCase v) async {
+    useCase = v;
+    await _prefs.setString('useCase', v.name);
   }
 
   Future<void> setAutoSummary(bool v) async {
