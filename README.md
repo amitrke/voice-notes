@@ -27,10 +27,12 @@ Hugging Face URLs pinned to a commit, plus Silero voice detection (~0.6 MB). Fil
 use (`lib/services/model_store.dart`).
 
 Indian-language models sit beside the Whisper ones in the same list: Meta's Omnilingual ASR 300M (Apache-2.0, many
-languages, ~365 MB) and AI4Bharat IndicConformer for Tamil, Telugu and Malayalam (MIT, ~137 MB each, one language
-each). They only transcribe: no language detection for Omnilingual, no English translation. The IndicConformer files
-are community conversions for sherpa-onnx (`csndhanasekar/...`), not published by AI4Bharat, and neither family has
-been run on a device yet. There is no Hindi-only model: no sherpa-ready export was found. Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
+languages, ~365 MB) and AI4Bharat IndicConformer for Hindi (~198 MB), Tamil, Telugu and Malayalam (MIT, ~137 MB
+each), one language each. They only transcribe: no language detection for Omnilingual, no English translation. The
+IndicConformer files are community conversions for sherpa-onnx (`csndhanasekar/...`; Hindi from
+`ngiftsun/indicconformer-hi-int8-sherpa`, CC-BY-4.0), not published by AI4Bharat. Omnilingual tends to write Hindi
+speech in Urdu script, and its CTC model takes no language hint, so Hindi speakers should use the Hindi model. The
+IndicConformer models have not been run on a device yet. Voice detection cuts recordings into pieces of at most 20 s (Whisper reads
 30 s at a time); each piece is one timestamped line. It has no text model, so titles and summaries need a
 separate enrichment provider.
 
