@@ -6,6 +6,7 @@ import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
 import '../services/model_store.dart';
+import 'dictionary_page.dart';
 import 'links.dart';
 import 'text_size.dart';
 import 'theme.dart';
@@ -25,6 +26,24 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!ok) {
       messenger.showSnackBar(
           const SnackBar(content: Text('Could not open the guide: $apiKeyGuideUrl')));
+    }
+  }
+
+  /// What "Identify speakers" does with the transcription provider in use.
+  String _speakerHelp(SettingsStore s, AppState state) {
+    switch (s.active) {
+      case ProviderId.gemini:
+        return 'Gemini labels who speaks each line. Timing is approximate, so '
+            'following along may drift a little.';
+      case ProviderId.onDevice:
+        return state.settings.models.isInstalled(speakerModelsId)
+            ? 'Tells voices apart on this device. Works best with a few '
+                'people and little background noise.'
+            : 'Needs a small download (about 30 MB) below, under Offline '
+                'model.';
+      default:
+        return 'Only Gemini and On this device can tell speakers apart. '
+            '${s.active.label} will not label them.';
     }
   }
 
@@ -115,6 +134,46 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (v) async {
                     await s.setTranslate(v);
                     setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Identify speakers'),
+                  subtitle: Text(_speakerHelp(s, state)),
+                  value: s.identifySpeakers,
+                  onChanged: (v) async {
+                    await s.setIdentifySpeakers(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Delete audio after transcribing'),
+                  subtitle: const Text(
+                      'Keeps the text and removes the recording once it has '
+                      'been transcribed. Saves space; you can no longer play '
+                      'it back or transcribe it again.'),
+                  value: s.deleteAudioAfter,
+                  onChanged: (v) async {
+                    await s.setDeleteAudioAfter(v);
+                    setState(() {});
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.spellcheck),
+                  title: const Text('Custom dictionary'),
+                  subtitle: Text(s.dictionary.isEmpty
+                      ? 'Names and terms to get right'
+                      : '${s.dictionary.entries.length} '
+                          '${s.dictionary.entries.length == 1 ? 'word' : 'words'}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const DictionaryPage()));
+                    if (mounted) setState(() {});
                   },
                 ),
                 const Divider(),
@@ -472,6 +531,19 @@ class _OfflineModels extends StatelessWidget {
               onCancel: models.cancel,
               onDelete: () => _delete(context, models, m),
             ),
+          const Divider(),
+          _SpeakerModelsRow(
+            installed: models.isInstalled(speakerModelsId),
+            downloading: models.downloading == speakerModelsId,
+            busy: models.downloading != null,
+            progress: models.progress,
+            onDownload: () => _download(context, models, speakerModelsId),
+            onCancel: models.cancel,
+            onDelete: () async {
+              await models.delete(speakerModelsId);
+              onChanged();
+            },
+          ),
           if (store.translate &&
               models.byId(selected)?.canTranslate == false)
             Padding(
@@ -583,6 +655,72 @@ class _ModelRow extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Download, cancel or delete the small models that tell voices apart.
+class _SpeakerModelsRow extends StatelessWidget {
+  final bool installed;
+  final bool downloading;
+  final bool busy;
+  final double progress;
+  final VoidCallback onDownload;
+  final VoidCallback onCancel;
+  final VoidCallback onDelete;
+  const _SpeakerModelsRow({
+    required this.installed,
+    required this.downloading,
+    required this.busy,
+    required this.progress,
+    required this.onDownload,
+    required this.onCancel,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final Widget action = downloading
+        ? TextButton(onPressed: onCancel, child: const Text('Cancel'))
+        : installed
+            ? IconButton(
+                tooltip: 'Delete speaker models',
+                icon: const Icon(Icons.delete_outline),
+                onPressed: onDelete,
+              )
+            : OutlinedButton(
+                onPressed: busy ? null : onDownload,
+                child: const Text('Download'),
+              );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.record_voice_over_outlined,
+                color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Speaker models · ${_size(speakerSegmentationFile.size + speakerEmbeddingFile.size)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text('Tell voices apart. Used when "Identify speakers" is on.',
+                      style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ),
+            action,
+          ],
+        ),
+        if (downloading)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(36, 8, 8, 0),
+            child: LinearProgressIndicator(value: progress),
+          ),
+      ],
     );
   }
 }

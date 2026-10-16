@@ -31,6 +31,20 @@ separate enrichment provider.
 Timestamped lines (on-device and OpenAI) drive the note screen's follow-along highlighting, tap-to-seek, and
 SRT export.
 
+### Dictionary, speakers, folders, find and replace
+
+- **Custom dictionary** (Settings): terms are sent as a hint to OpenAI (`prompt`) and Gemini, and "sounds like"
+  spellings are corrected in every new transcript with any provider (`lib/data/dictionary.dart`).
+- **Identify speakers** (Settings): Gemini returns speaker turns with approximate times; "On this device" runs
+  sherpa-onnx diarization (pyannote segmentation + a speaker embedding, about 30 MB, downloaded from Settings)
+  and labels each line by overlap (`lib/providers/speaker_assign.dart`). Speakers can be renamed per note.
+  Others (Sarvam, OpenAI) do not label speakers. Recordings over 45 minutes are not diarized on the device.
+- **Folders**: one folder per note, filter chips on the home screen. Database version 5.
+- **Find and replace** across notes (home screen), previewing the notes it will change.
+- **Delete audio after transcribing** (Settings): keeps the text, removes the file.
+- **Share to the app** (Android): audio and video shared from other apps become notes
+  (`SharedAudio.kt`, `lib/services/share_intake.dart`). iOS has no share extension yet.
+
 ### Enrichment (titles, summaries, clinical notes)
 
 Text work can use a different provider from transcription (Settings > Enrichment). OpenRouter is available

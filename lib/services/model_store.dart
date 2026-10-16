@@ -113,6 +113,27 @@ const vadFile = ModelFile(
   '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
 );
 
+/// The two small models that tell voices apart on the device: pyannote
+/// segmentation (who talks when) and a speaker embedding (whose voice it is).
+/// Pinned to Hugging Face commits like the Whisper files.
+const speakerSegmentationFile = ModelFile(
+  'segmentation.int8.onnx',
+  'https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.int8.onnx',
+  1540506,
+  'd582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d',
+);
+
+const speakerEmbeddingFile = ModelFile(
+  'embedding.onnx',
+  'https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx',
+  28281164,
+  'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2',
+);
+
+/// Id [ModelStore.download] and [ModelStore.delete] take for the speaker
+/// models, which are installed separately from the Whisper models.
+const speakerModelsId = 'speakers';
+
 OfflineModel? offlineModelById(String? id) =>
     offlineModels.where((m) => m.id == id).firstOrNull;
 
@@ -125,6 +146,13 @@ class InstalledModel {
   final String vad;
   const InstalledModel(
       this.model, this.encoder, this.decoder, this.tokens, this.vad);
+}
+
+/// Paths of the installed speaker models.
+class InstalledSpeakerModels {
+  final String segmentation;
+  final String embedding;
+  const InstalledSpeakerModels(this.segmentation, this.embedding);
 }
 
 class ModelDownloadException implements Exception {
@@ -148,12 +176,16 @@ class ModelStore extends ChangeNotifier {
   /// The models on offer ([offlineModels]; tests pass small fakes).
   final List<OfflineModel> catalog;
   final ModelFile vad;
+  final ModelFile speakerSegmentation;
+  final ModelFile speakerEmbedding;
 
   ModelStore({
     Future<Directory> Function()? baseDir,
     http.Client Function()? client,
     List<OfflineModel>? catalog,
     this.vad = vadFile,
+    this.speakerSegmentation = speakerSegmentationFile,
+    this.speakerEmbedding = speakerEmbeddingFile,
   })  : _baseDir = baseDir ?? getApplicationSupportDirectory,
         _newClient = client ?? http.Client.new,
         catalog = catalog ?? offlineModels;
@@ -162,6 +194,7 @@ class ModelStore extends ChangeNotifier {
 
   late Directory _root;
   final _installed = <String>{};
+  bool _speakersInstalled = false;
 
   String? _downloading;
   int _received = 0;
@@ -180,7 +213,8 @@ class ModelStore extends ChangeNotifier {
   /// Message from the last failed download, until the next one starts.
   String? get error => _error;
 
-  bool isInstalled(String id) => _installed.contains(id);
+  bool isInstalled(String id) =>
+      id == speakerModelsId ? _speakersInstalled : _installed.contains(id);
   bool get hasAny => _installed.isNotEmpty;
 
   Future<void> load() async {
@@ -189,6 +223,7 @@ class ModelStore extends ChangeNotifier {
     for (final m in catalog) {
       if (await _complete(m)) _installed.add(m.id);
     }
+    _speakersInstalled = await _speakersComplete();
     notifyListeners();
   }
 
@@ -210,6 +245,24 @@ class ModelStore extends ChangeNotifier {
     return ok(_vadPath, vad.size);
   }
 
+  List<(ModelFile, String)> get _speakerFiles => [
+        (speakerSegmentation, _path('speakers', speakerSegmentation)),
+        (speakerEmbedding, _path('speakers', speakerEmbedding)),
+      ];
+
+  Future<bool> _speakersComplete() async {
+    for (final (f, path) in _speakerFiles) {
+      final file = File(path);
+      if (!await file.exists() || await file.length() != f.size) return false;
+    }
+    return true;
+  }
+
+  /// The speaker models, once downloaded.
+  InstalledSpeakerModels? installedSpeakers() => _speakersInstalled
+      ? InstalledSpeakerModels(_speakerFiles[0].$2, _speakerFiles[1].$2)
+      : null;
+
   InstalledModel? installed(String id) {
     final m = byId(id);
     if (m == null || !isInstalled(id)) return null;
@@ -220,12 +273,15 @@ class ModelStore extends ChangeNotifier {
   /// Downloads every missing file of [id]. Returns an error message, or null
   /// when the model is installed (or the download was cancelled).
   Future<String?> download(String id) async {
+    final speakers = id == speakerModelsId;
     final m = byId(id);
-    if (m == null || _downloading != null) return null;
-    final todo = <(ModelFile, String)>[
-      for (final f in m.files) (f, _modelPath(m, f)),
-      (vad, _vadPath),
-    ];
+    if ((m == null && !speakers) || _downloading != null) return null;
+    final todo = speakers
+        ? _speakerFiles
+        : <(ModelFile, String)>[
+            for (final f in m!.files) (f, _modelPath(m, f)),
+            (vad, _vadPath),
+          ];
     _downloading = id;
     _error = null;
     _cancel = false;
@@ -237,7 +293,11 @@ class ModelStore extends ChangeNotifier {
       for (final (f, path) in todo) {
         await _fetch(client, f, path);
       }
-      _installed.add(id);
+      if (speakers) {
+        _speakersInstalled = true;
+      } else {
+        _installed.add(id);
+      }
       await _excludeFromBackup(_root.path);
       return null;
     } on _Cancelled {
@@ -323,6 +383,13 @@ class ModelStore extends ChangeNotifier {
 
   /// Removes [id]'s files. The voice detection file goes with the last model.
   Future<void> delete(String id) async {
+    if (id == speakerModelsId) {
+      final dir = Directory(p.join(_root.path, 'speakers'));
+      if (await dir.exists()) await dir.delete(recursive: true);
+      _speakersInstalled = false;
+      notifyListeners();
+      return;
+    }
     final m = byId(id);
     if (m == null) return;
     final dir = Directory(p.join(_root.path, m.id));

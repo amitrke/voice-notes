@@ -9,6 +9,7 @@ import '../providers/openrouter_provider.dart';
 import '../providers/sarvam_provider.dart';
 import '../services/audio_converter.dart';
 import '../services/model_store.dart';
+import 'dictionary.dart';
 import 'text_scale.dart';
 
 class ModelDefaults {
@@ -50,6 +51,15 @@ class SettingsStore {
   bool clinical = false;
   double textScale = defaultTextScale;
 
+  /// Remove a recording's audio file once its text has been saved.
+  bool deleteAudioAfter = false;
+
+  /// Label who is speaking, where the provider can tell voices apart.
+  bool identifySpeakers = false;
+
+  /// Names and terms the user wants spelled a certain way.
+  Dictionary dictionary = Dictionary();
+
   /// The offline model the user picked; see [offlineModel].
   String? _offlineModel;
 
@@ -66,6 +76,10 @@ class SettingsStore {
     clinical = _prefs.getBool('clinical') ?? false;
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
+    deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
+    identifySpeakers = _prefs.getBool('identifySpeakers') ?? false;
+    dictionary =
+        Dictionary.fromLines(_prefs.getStringList('dictionary') ?? const []);
     for (final id in ProviderId.values) {
       final k = await _secure.read(key: 'apikey_${id.name}');
       if (k != null && k.isNotEmpty) _keys[id] = k;
@@ -162,6 +176,21 @@ class SettingsStore {
     await _prefs.setBool('autoSummary', v);
   }
 
+  Future<void> setDeleteAudioAfter(bool v) async {
+    deleteAudioAfter = v;
+    await _prefs.setBool('deleteAudioAfter', v);
+  }
+
+  Future<void> setIdentifySpeakers(bool v) async {
+    identifySpeakers = v;
+    await _prefs.setBool('identifySpeakers', v);
+  }
+
+  Future<void> setDictionary(Dictionary d) async {
+    dictionary = d;
+    await _prefs.setStringList('dictionary', d.toLines());
+  }
+
   /// Builds the provider for [id], or null when it is not ready (see
   /// [isReady]).
   AiProvider? build(ProviderId id) {
@@ -187,7 +216,10 @@ class SettingsStore {
         final m = models.installed(offlineModel!);
         return m == null
             ? null
-            : OnDeviceProvider(model: m, toWav: convertToWav16kMono);
+            : OnDeviceProvider(
+                model: m,
+                toWav: convertToWav16kMono,
+                speakerModels: models.installedSpeakers());
     }
   }
 }

@@ -9,6 +9,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../services/model_store.dart';
 import 'ai_provider.dart';
+import 'speaker_assign.dart';
 import 'wav_utils.dart';
 
 /// Whisper on the phone through sherpa-onnx. Whisper reads at most 30 s at a
@@ -21,7 +22,11 @@ class OnDeviceProvider implements AiProvider {
   /// Converts non-WAV audio to a 16 kHz mono WAV file (null = cannot).
   final Future<File?> Function(File)? toWav;
 
-  OnDeviceProvider({required this.model, this.toWav});
+  /// Models that tell voices apart; null when not downloaded, in which case
+  /// lines come without speaker labels.
+  final InstalledSpeakerModels? speakerModels;
+
+  OnDeviceProvider({required this.model, this.toWav, this.speakerModels});
 
   @override
   ProviderId get id => ProviderId.onDevice;
@@ -34,19 +39,28 @@ class OnDeviceProvider implements AiProvider {
   static Future<void> _queue = Future.value();
 
   @override
-  Future<Transcription> transcribe(File audio, {required bool translate}) {
-    final run = _queue.then((_) => _transcribe(audio, translate));
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false}) {
+    final run = _queue.then((_) => _transcribe(audio, translate, speakers));
     _queue = run.then((_) {}, onError: (_) {});
     return run;
   }
 
-  Future<Transcription> _transcribe(File audio, bool translate) async {
+  Future<Transcription> _transcribe(
+      File audio, bool translate, bool speakers) async {
     for (final path in [model.encoder, model.decoder, model.tokens, model.vad]) {
       if (!File(path).existsSync()) {
         throw const ProviderException(
             'The offline model is missing. Download it again in Settings.');
       }
     }
+    // A missing speaker model only costs the labels, not the transcript.
+    final diarize = speakers ? speakerModels : null;
+    final canDiarize = diarize != null &&
+        File(diarize.segmentation).existsSync() &&
+        File(diarize.embedding).existsSync();
     File wav = audio;
     File? temp;
     if (p.extension(audio.path).toLowerCase() != '.wav') {
@@ -64,6 +78,8 @@ class OnDeviceProvider implements AiProvider {
       tokens: model.tokens,
       vad: model.vad,
       translate: translate && model.model.canTranslate,
+      segmentationModel: canDiarize ? diarize.segmentation : null,
+      embeddingModel: canDiarize ? diarize.embedding : null,
       threads: math.min(4, math.max(1, Platform.numberOfProcessors ~/ 2)),
     );
     try {
@@ -94,6 +110,9 @@ class _Job {
   final String wav, encoder, decoder, tokens, vad;
   final bool translate;
   final int threads;
+
+  /// Set when speakers are to be told apart.
+  final String? segmentationModel, embeddingModel;
   const _Job({
     required this.wav,
     required this.encoder,
@@ -102,6 +121,8 @@ class _Job {
     required this.vad,
     required this.translate,
     required this.threads,
+    this.segmentationModel,
+    this.embeddingModel,
   });
 }
 
@@ -142,8 +163,53 @@ Transcription _run(_Job job) {
     text: join(lines.map((l) => l.text)),
     english: english == null ? '' : join(lines.map((l) => l.english)),
     languageCode: language.isEmpty ? null : language,
-    lines: lines,
+    lines: job.segmentationModel == null
+        ? lines
+        : assignSpeakers(lines, _diarize(job, pcm)),
   );
+}
+
+/// Longest recording the speaker models are run on: they take the whole
+/// recording as one array, which gets large for hours of audio.
+const _maxDiarizeSamples = 45 * 60 * _rate;
+
+/// Who talks when, from the whole recording. Empty when the recording is too
+/// long, or the models fail: the transcript is still good without labels.
+List<SpeakerTurn> _diarize(_Job job, Int16List pcm) {
+  if (pcm.length > _maxDiarizeSamples) return const [];
+  sherpa.OfflineSpeakerDiarization? diarizer;
+  try {
+    diarizer = sherpa.OfflineSpeakerDiarization(
+      sherpa.OfflineSpeakerDiarizationConfig(
+        segmentation: sherpa.OfflineSpeakerSegmentationModelConfig(
+          pyannote: sherpa.OfflineSpeakerSegmentationPyannoteModelConfig(
+              model: job.segmentationModel!),
+          numThreads: job.threads,
+          debug: false,
+        ),
+        embedding: sherpa.SpeakerEmbeddingExtractorConfig(
+            model: job.embeddingModel!, numThreads: job.threads, debug: false),
+        // Unknown number of speakers: the threshold decides how many.
+        clustering: const sherpa.FastClusteringConfig(threshold: 0.5),
+        minDurationOn: 0.2,
+        minDurationOff: 0.5,
+      ),
+    );
+    final segments =
+        diarizer.process(samples: pcmToFloat(pcm, 0, pcm.length));
+    return [
+      for (final s in segments)
+        (
+          startMs: (s.start * 1000).round(),
+          endMs: (s.end * 1000).round(),
+          speaker: s.speaker,
+        ),
+    ];
+  } catch (_) {
+    return const [];
+  } finally {
+    diarizer?.free();
+  }
 }
 
 /// Where speech is, in samples.

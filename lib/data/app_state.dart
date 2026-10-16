@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import '../ui/format.dart';
+import 'find_replace.dart';
 import 'notes_db.dart';
 import 'settings_store.dart';
 
@@ -25,19 +26,47 @@ class AppState extends ChangeNotifier {
   }
 
   List<Note> _notes = [];
+  List<Folder> _folders = [];
   String _query = '';
+  int? _folder;
 
+  /// Choice for [folderFilter] that shows only notes in no folder.
+  static const unfiled = -1;
+
+  List<Folder> get folders => List.unmodifiable(_folders);
+
+  /// Which notes the list shows: null = all, [unfiled], or a folder id.
+  int? get folderFilter => _folder;
+
+  set folderFilter(int? v) {
+    _folder = v;
+    notifyListeners();
+  }
+
+  String get query => _query;
+
+  /// Notes in the chosen folder that match the search text.
   List<Note> get notes {
     final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return _notes;
-    return _notes
-        .where((n) =>
-            n.title.toLowerCase().contains(q) ||
-            n.summary.toLowerCase().contains(q) ||
-            n.transcript.toLowerCase().contains(q) ||
-            n.english.toLowerCase().contains(q))
-        .toList();
+    return _notes.where((n) {
+      if (_folder == unfiled && n.folderId != null) return false;
+      if (_folder != null && _folder != unfiled && n.folderId != _folder) {
+        return false;
+      }
+      if (q.isEmpty) return true;
+      return n.title.toLowerCase().contains(q) ||
+          n.summary.toLowerCase().contains(q) ||
+          n.transcript.toLowerCase().contains(q) ||
+          n.english.toLowerCase().contains(q);
+    }).toList();
   }
+
+  /// Every note, whatever the search or folder.
+  List<Note> get allNotes => List.unmodifiable(_notes);
+
+  int noteCountIn(int? folderId) => folderId == unfiled
+      ? _notes.where((n) => n.folderId == null).length
+      : _notes.where((n) => n.folderId == folderId).length;
 
   bool get hasAnyNotes => _notes.isNotEmpty;
   bool get hasActiveKey => settings.isReady(settings.active);
@@ -66,6 +95,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _notes = await db.all();
+    _folders = await db.folders();
     // Anything left "processing" by a previous run was interrupted.
     for (final n in _notes.toList()) {
       if (!n.segments.any((s) => s.status == NoteStatus.processing)) continue;
@@ -120,6 +150,90 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ---- Folders --------------------------------------------------------------
+
+  Future<Folder?> createFolder(String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return null;
+    final existing =
+        _folders.where((f) => f.name.toLowerCase() == n.toLowerCase());
+    if (existing.isNotEmpty) return existing.first;
+    final f = await db.insertFolder(n);
+    _folders = [..._folders, f]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    notifyListeners();
+    return f;
+  }
+
+  Future<void> renameFolder(int id, String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    await db.renameFolder(id, n);
+    _folders = [
+      for (final f in _folders) f.id == id ? Folder(id: id, name: n) : f,
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    notifyListeners();
+  }
+
+  /// Deletes the folder. Its notes are kept and become unfiled.
+  Future<void> deleteFolder(int id) async {
+    await db.deleteFolder(id);
+    _folders = _folders.where((f) => f.id != id).toList();
+    _notes = [
+      for (final n in _notes)
+        n.folderId == id ? n.copyWith(clearFolder: true) : n,
+    ];
+    if (_folder == id) _folder = null;
+    notifyListeners();
+  }
+
+  /// Files the note in [folderId], or takes it out of its folder when null.
+  Future<void> moveToFolder(int noteId, int? folderId) => _edit(
+      noteId,
+      (n) =>
+          folderId == null ? n.copyWith(clearFolder: true) : n.copyWith(folderId: folderId));
+
+  // ---- Speakers -------------------------------------------------------------
+
+  /// Names speaker [speakerId] in the note; an empty [name] goes back to the
+  /// default "Speaker N".
+  Future<void> renameSpeaker(int noteId, String speakerId, String name) =>
+      _edit(noteId, (n) {
+        final names = {...n.speakerNames};
+        final t = name.trim();
+        if (t.isEmpty) {
+          names.remove(speakerId);
+        } else {
+          names[speakerId] = t;
+        }
+        return n.copyWith(speakerNames: names);
+      });
+
+  // ---- Find and replace -----------------------------------------------------
+
+  /// How many times the text appears in each note that has it, newest first.
+  List<({Note note, int count})> findMatches(TextReplacer r) => [
+        for (final n in _notes)
+          if (countInNote(n, r) > 0) (note: n, count: countInNote(n, r)),
+      ];
+
+  /// Applies [r] to the notes in [noteIds]; returns how many were changed.
+  Future<int> replaceIn(Iterable<int> noteIds, TextReplacer r) async {
+    var changedNotes = 0;
+    for (final id in noteIds) {
+      final n = byId(id);
+      if (n == null) continue;
+      final edit = replaceInNote(n, r);
+      if (edit == null) continue;
+      for (final s in edit.changed) {
+        await db.saveSegment(s);
+      }
+      await _save(edit.note);
+      changedNotes++;
+    }
+    return changedNotes;
+  }
+
   /// Stores a note for [audioPath] right away (so nothing is lost if the
   /// network fails) and transcribes it in the background.
   Future<Note> addAudio(String audioPath, {int? durationMs}) async {
@@ -171,9 +285,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> retrySegment(int noteId, int segId) async {
+    final seg = byId(noteId)?.segments.where((s) => s.id == segId).firstOrNull;
+    if (seg == null || !seg.hasAudio) return;
     await _editSegment(noteId, segId,
         (s) => s.copyWith(status: NoteStatus.processing, clearError: true));
     _run(_process(noteId, segId));
+  }
+
+  /// Deletes a recording's audio file but keeps its text.
+  Future<void> _discardAudio(int noteId, int segId, String path) async {
+    await _editSegment(noteId, segId, (s) => s.copyWith(audioPath: ''));
+    await _deleteFile(path);
   }
 
   /// Removes one recording (and its audio file) from a note that has others.
@@ -184,7 +306,7 @@ class AppState extends ChangeNotifier {
     await db.deleteSegment(segId);
     await _edit(noteId,
         (n) => n.withSegments(n.segments.where((s) => s.id != segId).toList()));
-    await _deleteFile(seg.audioPath);
+    if (seg.hasAudio) await _deleteFile(seg.audioPath);
   }
 
   Future<void> _process(int noteId, int segId) async {
@@ -207,9 +329,14 @@ class AppState extends ChangeNotifier {
     final path =
         byId(noteId)?.segments.where((s) => s.id == segId).firstOrNull?.audioPath;
     if (path == null) return;
+    // Its audio was deleted after the first transcription; nothing to redo.
+    if (path.isEmpty) return;
     try {
-      final t = await provider.transcribe(File(path),
-          translate: settings.translate);
+      final dictionary = settings.dictionary;
+      final t = dictionary.applyTo(await provider.transcribe(File(path),
+          translate: settings.translate,
+          vocabulary: dictionary.hints,
+          speakers: settings.identifySpeakers));
       await _editSegment(
           noteId,
           segId,
@@ -221,6 +348,11 @@ class AppState extends ChangeNotifier {
                 status: NoteStatus.done,
                 clearError: true,
               ));
+      // Only once the text is safely stored, and only if there is some:
+      // an empty result may just mean the audio was bad, and deserves a retry.
+      if (settings.deleteAudioAfter && t.text.trim().isNotEmpty) {
+        await _discardAudio(noteId, segId, path);
+      }
     } catch (e) {
       await _editSegment(noteId, segId,
           (s) => s.copyWith(status: NoteStatus.failed, error: _describe(e)));
@@ -341,7 +473,7 @@ class AppState extends ChangeNotifier {
     _notes.removeWhere((e) => e.id == id);
     notifyListeners();
     for (final s in n.segments) {
-      await _deleteFile(s.audioPath);
+      if (s.hasAudio) await _deleteFile(s.audioPath);
     }
   }
 

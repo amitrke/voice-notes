@@ -14,6 +14,7 @@ import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import 'audio_input.dart';
 import 'clinical_page.dart';
+import 'folders.dart';
 import 'format.dart';
 import 'stale_banner.dart';
 import 'text_size.dart';
@@ -126,6 +127,16 @@ class _NotePageState extends State<NotePage> {
     ));
   }
 
+  /// Lets the user give each voice a name; "Speaker 1" until they do.
+  Future<void> _nameSpeakers(AppState state, int noteId) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => _SpeakerNames(noteId: noteId),
+    );
+  }
+
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context)
@@ -144,7 +155,11 @@ class _NotePageState extends State<NotePage> {
         !isEnglish(note.languageCode) &&
         note.english.trim() != note.transcript.trim();
     final showEnglish = _showEnglish && hasEnglish;
-    final text = showEnglish ? note.english : note.transcript;
+    final labelled = hasSpeakers(note);
+    // With speakers known, copy and share carry "Name: ..." paragraphs.
+    final text = labelled
+        ? speakerTranscript(note, english: showEnglish)
+        : (showEnglish ? note.english : note.transcript);
     final lang = languageLabel(note.languageCode);
 
     final theme = Theme.of(context);
@@ -184,6 +199,10 @@ class _NotePageState extends State<NotePage> {
                 await state.retry(note.id!);
               } else if (v == 'srt') {
                 await _exportSrt(note, english: showEnglish);
+              } else if (v == 'folder') {
+                await moveNoteToFolder(context, note);
+              } else if (v == 'speakers') {
+                await _nameSpeakers(state, note.id!);
               }
             },
             itemBuilder: (_) => [
@@ -199,8 +218,14 @@ class _NotePageState extends State<NotePage> {
                     child: Text(showEnglish
                         ? 'Export English subtitles (SRT)'
                         : 'Export subtitles (SRT)')),
+              if (labelled)
+                const PopupMenuItem(
+                    value: 'speakers', child: Text('Name the speakers')),
               const PopupMenuItem(
-                  value: 'retry', child: Text('Transcribe again')),
+                  value: 'folder', child: Text('Move to folder')),
+              if (note.segments.any((s) => s.hasAudio))
+                const PopupMenuItem(
+                    value: 'retry', child: Text('Transcribe again')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
           ),
@@ -265,6 +290,10 @@ class _NotePageState extends State<NotePage> {
                 ?lang,
                 ProviderId.values.asNameMap()[note.provider]?.label ??
                     note.provider,
+                ?state.folders
+                    .where((f) => f.id == note.folderId)
+                    .firstOrNull
+                    ?.name,
               ].join(' · '),
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: scheme.onSurfaceVariant),
@@ -468,12 +497,29 @@ class _SegmentTile extends StatelessWidget {
                 onPressed: onDelete,
               ),
             ]),
-          _AudioBar(
-            path: seg.audioPath,
-            knownDurationMs: seg.durationMs,
-            segmentId: seg.id!,
-            playback: playback,
-          ),
+          if (seg.hasAudio)
+            _AudioBar(
+              path: seg.audioPath,
+              knownDurationMs: seg.durationMs,
+              segmentId: seg.id!,
+              playback: playback,
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(children: [
+                Icon(Icons.delete_sweep_outlined,
+                    size: 18, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Audio deleted after transcription. The text is kept.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ]),
+            ),
           if (seg.status == NoteStatus.processing)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
@@ -715,7 +761,20 @@ class _TimedTranscript extends StatelessWidget {
             }
             continue;
           }
+          String? lastSpeaker;
           for (final l in seg.lines) {
+            if (l.speaker != null && l.speaker != lastSpeaker) {
+              children.add(Padding(
+                padding: const EdgeInsets.fromLTRB(6, 10, 6, 0),
+                child: Text(
+                  note.speakerLabel(l.speaker!),
+                  style: theme.textTheme.labelLarge?.copyWith(
+                      color: _speakerColor(scheme, l.speaker!, note),
+                      fontWeight: FontWeight.w700),
+                ),
+              ));
+            }
+            lastSpeaker = l.speaker;
             final active = playback.segment == seg.id &&
                 playback.positionMs >= l.startMs &&
                 playback.positionMs < l.endMs;
@@ -743,6 +802,96 @@ class _TimedTranscript extends StatelessWidget {
           children: children,
         );
       },
+    );
+  }
+}
+
+/// A steady colour per voice, so turns are easy to tell apart.
+Color _speakerColor(ColorScheme scheme, String id, Note note) {
+  final palette = [
+    scheme.primary,
+    scheme.tertiary,
+    scheme.secondary,
+    scheme.error,
+  ];
+  final i = note.speakerIds.indexOf(id);
+  return palette[(i < 0 ? 0 : i) % palette.length];
+}
+
+/// Sheet to rename the voices heard in a note.
+class _SpeakerNames extends StatefulWidget {
+  final int noteId;
+  const _SpeakerNames({required this.noteId});
+
+  @override
+  State<_SpeakerNames> createState() => _SpeakerNamesState();
+}
+
+class _SpeakerNamesState extends State<_SpeakerNames> {
+  final _controllers = <String, TextEditingController>{};
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.read<AppState>();
+    final note = state.byId(widget.noteId);
+    if (note == null) return const SizedBox.shrink();
+    final ids = note.speakerIds;
+    for (final id in ids) {
+      _controllers.putIfAbsent(
+          id, () => TextEditingController(text: note.speakerNames[id] ?? ''));
+    }
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24, 0, 24, MediaQuery.of(context).viewInsets.bottom + 16),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Name the speakers',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              'Tell the voices apart by listening to a few lines. Names appear '
+              'in the transcript, copies and subtitles.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            for (final id in ids) ...[
+              TextField(
+                controller: _controllers[id],
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: 'Name',
+                  hintText: note.speakerLabel(id),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            FilledButton(
+              onPressed: () async {
+                final nav = Navigator.of(context);
+                for (final id in ids) {
+                  await state.renameSpeaker(
+                      widget.noteId, id, _controllers[id]!.text);
+                }
+                nav.pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

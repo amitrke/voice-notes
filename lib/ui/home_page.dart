@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
+import '../data/find_replace.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import 'audio_input.dart';
+import 'folders.dart';
 import 'format.dart';
 import 'note_page.dart';
+import 'replace_page.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 
@@ -46,6 +49,16 @@ class HomePage extends StatelessWidget {
             icon: const Icon(Icons.file_upload_outlined),
             onPressed: () => importAudio(context),
           ),
+          if (state.hasAnyNotes)
+            IconButton(
+              tooltip: 'Find and replace',
+              icon: const Icon(Icons.find_replace),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => ReplacePage(initialFind: state.query)),
+              ),
+            ),
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
@@ -73,6 +86,7 @@ class HomePage extends StatelessWidget {
                 onChanged: (v) => state.query = v,
               ),
             ),
+          if (state.hasAnyNotes) const _FolderBar(),
           Expanded(
             child: notes.isEmpty
                 ? _Empty(searching: state.hasAnyNotes)
@@ -84,6 +98,13 @@ class HomePage extends StatelessWidget {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: _NoteCard(
                           note: n,
+                          query: state.query,
+                          folderName: state.folderFilter == null
+                              ? state.folders
+                                  .where((f) => f.id == n.folderId)
+                                  .firstOrNull
+                                  ?.name
+                              : null,
                           showLanguage:
                               languageLabel(n.languageCode) != usualLanguage,
                         ),
@@ -255,10 +276,66 @@ class _Empty extends StatelessWidget {
   }
 }
 
+/// Chips to narrow the list to one folder, with "+" to add a folder. Long
+/// press a folder to rename or delete it.
+class _FolderBar extends StatelessWidget {
+  const _FolderBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    Widget chip(String label, int? value, {Folder? folder}) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: GestureDetector(
+            onLongPress:
+                folder == null ? null : () => showFolderActions(context, folder),
+            child: ChoiceChip(
+              label: Text(label),
+              selected: state.folderFilter == value,
+              onSelected: (_) => state.folderFilter = value,
+            ),
+          ),
+        );
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        children: [
+          chip('All', null),
+          if (state.folders.isNotEmpty) ...[
+            chip('No folder', AppState.unfiled),
+            for (final f in state.folders) chip(f.name, f.id, folder: f),
+          ],
+          ActionChip(
+            avatar: const Icon(Icons.create_new_folder_outlined, size: 18),
+            label: Text(state.folders.isEmpty ? 'Add folder' : 'New'),
+            onPressed: () async {
+              final name = await askName(context,
+                  title: 'New folder', action: 'Create');
+              if (name != null) {
+                final f = await state.createFolder(name);
+                if (f != null) state.folderFilter = f.id;
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _NoteCard extends StatelessWidget {
   final Note note;
   final bool showLanguage;
-  const _NoteCard({required this.note, required this.showLanguage});
+  final String query;
+  final String? folderName;
+  const _NoteCard({
+    required this.note,
+    required this.showLanguage,
+    this.query = '',
+    this.folderName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -271,14 +348,18 @@ class _NoteCard extends StatelessWidget {
       NoteStatus.failed => 'Transcription failed',
       NoteStatus.done => note.title.isEmpty ? 'Untitled note' : note.title,
     };
+    // While searching, show the words around the match when it is in the
+    // transcript, so it is clear why the note is listed.
     final body = failed
         ? (note.error ?? '')
-        : (note.summary.isNotEmpty
-              ? note.summary
-              : (note.english.isNotEmpty ? note.english : note.transcript));
+        : (matchSnippet(note, query) ??
+              (note.summary.isNotEmpty
+                  ? note.summary
+                  : (note.english.isNotEmpty ? note.english : note.transcript)));
     final meta = [
       formatTime(note.createdAt),
       if (note.durationMs != null) formatDuration(note.durationMs!),
+      ?folderName,
     ].join(' · ');
     final segments = note.segments;
     final done = segments
