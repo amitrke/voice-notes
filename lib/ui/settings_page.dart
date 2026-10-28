@@ -61,7 +61,9 @@ String transcriptionStatus(SettingsStore s) {
 
 /// Who writes titles, summaries and clinical notes.
 String writtenByStatus(SettingsStore s) {
-  if (s.enrichment != null) return s.enrichment!.label;
+  if (s.enrichment != null && s.enrichment != s.active) {
+    return s.enrichment!.label;
+  }
   return s.active.canText
       ? 'Same as transcription (${s.active.label})'
       : '${s.active.label} can\'t write text. Choose a provider.';
@@ -310,6 +312,7 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               children: [
                 SwitchListTile(
+                  secondary: const Icon(Icons.delete_outline),
                   title: const Text('Delete audio after transcribing'),
                   subtitle: const Text(
                       'Keeps the text and removes the recording. Saves space; '
@@ -321,8 +324,12 @@ class SettingsPage extends StatelessWidget {
                   },
                 ),
                 const Divider(),
+                const ListTile(
+                  leading: Icon(Icons.format_size),
+                  title: Text('Text size'),
+                ),
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   child: TextSizeControl(
                     value: state.textScale,
                     onChanged: state.setTextScale,
@@ -496,7 +503,9 @@ class _WrittenByPage extends StatelessWidget {
       children: [
         Card(
           child: RadioGroup<ProviderId?>(
-            groupValue: s.enrichment,
+            // The transcription provider is offered only as "Same as
+            // transcription", so picking it by name counts as that.
+            groupValue: s.enrichment == s.active ? null : s.enrichment,
             onChanged: (v) async {
               await s.setEnrichment(v);
               state.refresh();
@@ -512,7 +521,8 @@ class _WrittenByPage extends StatelessWidget {
                       : '${s.active.label} has no text model. Choose another '
                           'provider; it is used when you are online.'),
                 ),
-                for (final id in ProviderId.values.where((p) => p.canText))
+                for (final id in ProviderId.values
+                    .where((p) => p.canText && p != s.active))
                   RadioListTile<ProviderId?>(
                     value: id,
                     title: Text(id.label),
@@ -660,6 +670,11 @@ class _KeyTileState extends State<_KeyTile> {
   bool _hide = true;
   Timer? _pending;
 
+  /// Open at first when the provider is in use but has no key.
+  late bool _expanded = !widget.store.hasKey(widget.id) &&
+      (widget.store.active == widget.id ||
+          widget.store.textActive == widget.id);
+
   @override
   void dispose() {
     if (_pending?.isActive ?? false) {
@@ -697,12 +712,20 @@ class _KeyTileState extends State<_KeyTile> {
     ];
     return ExpansionTile(
       shape: const Border(),
-      initiallyExpanded: !s.hasKey(id) && uses.isNotEmpty,
+      initiallyExpanded: _expanded,
+      onExpansionChanged: (v) => setState(() => _expanded = v),
       title: Text(id.label, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(uses.isEmpty
           ? id.blurb
           : 'In use: ${uses.join(' and ')}'),
-      trailing: _KeyStatus(saved: s.hasKey(id)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _KeyStatus(saved: s.hasKey(id)),
+          const SizedBox(width: 8),
+          Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+        ],
+      ),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       children: [
         TextField(
