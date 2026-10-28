@@ -630,8 +630,8 @@ class AppState extends ChangeNotifier {
 
   String get _noTextProvider => settings.textActive.canText
       ? 'Add an API key for ${settings.textActive.label} in Settings.'
-      : 'On-device transcription has no text model. Turn on "Use a different '
-          'provider for text" under Settings > Titles, summaries and tags.';
+      : 'On-device transcription has no text model. Choose a text provider '
+          'under Settings > Written by.';
 
   static String _fallbackTitle(String text) {
     final words = text.trim().split(RegExp(r'\s+'));

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,28 +14,40 @@ import 'tags.dart';
 import 'text_size.dart';
 import 'theme.dart';
 
-/// Tags offered when the user switches to clinical work.
+/// Tags offered when the user turns on clinical notes.
 const clinicalTags = ['Patient', 'Follow-up'];
 
 /// The provider can label who is speaking.
 bool _canTellSpeakers(SettingsStore s) =>
     s.active == ProviderId.gemini || s.active == ProviderId.onDevice;
 
-/// What "Identify speakers" does with the transcription provider in use.
-String _speakerHelp(SettingsStore s) {
-  switch (s.active) {
-    case ProviderId.gemini:
-      return 'Gemini labels who speaks each line. Timing is approximate, so '
-          'following along may drift a little.';
-    case ProviderId.onDevice:
-      return s.models.isInstalled(speakerModelsId)
-          ? 'Tells voices apart on this device. Works best with a few '
-              'people and little background noise.'
-          : 'Needs the speaker models below (about 30 MB).';
-    default:
-      return 'Only Gemini and On this device can tell speakers apart. '
-          '${s.active.label} will not label them.';
+/// Why "Identify speakers" cannot be turned on, or null when it can.
+String? speakersBlocked(SettingsStore s) {
+  if (!_canTellSpeakers(s)) {
+    return '${s.active.label} can\'t tell speakers apart. Gemini and On this '
+        'device can.';
   }
+  if (s.active == ProviderId.onDevice &&
+      !s.models.isInstalled(speakerModelsId)) {
+    return 'Download the speaker models under Provider first (about 30 MB).';
+  }
+  return null;
+}
+
+/// What "Identify speakers" does with the transcription provider in use.
+String _speakerHelp(SettingsStore s) => s.active == ProviderId.gemini
+    ? 'Gemini labels who speaks each line. Timing is approximate.'
+    : 'Tells voices apart on this device. Works best with a few people and '
+        'little background noise.';
+
+/// Why "Translate to English" cannot be turned on, or null when it can.
+String? translateBlocked(SettingsStore s) {
+  if (s.active != ProviderId.onDevice) return null;
+  final id = s.offlineModel;
+  final m = id == null ? null : s.models.byId(id);
+  if (m == null || m.canTranslate) return null;
+  return 'The ${m.label} model can\'t translate. Pick a Whisper model under '
+      'Provider.';
 }
 
 /// One line saying how transcription is set up.
@@ -45,120 +59,138 @@ String transcriptionStatus(SettingsStore s) {
   return '${s.active.label} · ${s.hasKey(s.active) ? 'key saved' : 'no key yet'}';
 }
 
-/// One line summing up the transcription options.
-String optionsStatus(SettingsStore s) {
-  final n = s.dictionary.entries.length;
-  return [
-    s.translate ? 'Translate on' : 'Translate off',
-    s.identifySpeakers ? 'Speakers on' : 'Speakers off',
-    if (n > 0) '$n ${n == 1 ? 'word' : 'words'}',
-  ].join(' · ');
+/// Who writes titles, summaries and clinical notes.
+String writtenByStatus(SettingsStore s) {
+  if (s.enrichment != null) return s.enrichment!.label;
+  return s.active.canText
+      ? 'Same as transcription (${s.active.label})'
+      : '${s.active.label} can\'t write text. Choose a provider.';
 }
 
-/// One line summing up titles, summaries and tags.
-String textStatus(SettingsStore s, AppState state) {
-  final waiting = state.suggestedTags.length;
-  final tags = state.approvedTags.length;
-  return [
-    if (!s.autoSummary)
-      'Off'
-    else if (!s.textActive.canText)
-      'Needs a text provider'
-    else
-      'On · ${s.textActive.label}',
-    waiting > 0
-        ? '$waiting ${waiting == 1 ? 'tag' : 'tags'} to approve'
-        : '$tags ${tags == 1 ? 'tag' : 'tags'}',
-  ].join(' · ');
+/// Which providers have a key saved.
+String keysStatus(SettingsStore s) {
+  final saved = [
+    for (final id in ProviderId.values)
+      if (id.needsKey && s.hasKey(id)) id.label,
+  ];
+  if (saved.isEmpty) return 'No keys saved yet';
+  if (saved.length == 1) return '${saved.first} saved';
+  return '${saved.sublist(0, saved.length - 1).join(', ')} and '
+      '${saved.last} saved';
 }
 
-class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+/// Where the fix for a [setupProblem] is.
+enum SetupFix { keys, provider, writtenBy }
 
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  Future<void> _setUseCase(AppState state, UseCase u) async {
-    await state.settings.setUseCase(u);
-    state.refresh();
-    if (u == UseCase.clinical && mounted) await _offerClinicalSetup(state);
+/// The first thing stopping notes from being made, or null when set up.
+({String message, SetupFix fix})? setupProblem(SettingsStore s) {
+  if (!s.isReady(s.active)) {
+    return s.active.needsKey
+        ? (
+            message: 'Add your ${s.active.label} key to start transcribing',
+            fix: SetupFix.keys
+          )
+        : (
+            message: 'Download an offline model to start transcribing',
+            fix: SetupFix.provider
+          );
   }
+  if (s.autoSummary || s.clinical) {
+    final t = s.textActive;
+    if (!t.canText) {
+      return (
+        message: 'Choose who writes titles and summaries',
+        fix: SetupFix.writtenBy
+      );
+    }
+    if (!s.hasKey(t)) {
+      return (
+        message: 'Add your ${t.label} key for titles and summaries',
+        fix: SetupFix.keys
+      );
+    }
+  }
+  return null;
+}
 
-  /// Offers, once per switch, the settings that suit clinical work. Anything
-  /// already in place is not offered again.
-  Future<void> _offerClinicalSetup(AppState state) async {
-    final s = state.settings;
-    final have = state.approvedTags.map((t) => t.name.toLowerCase()).toSet();
-    final missing =
-        clinicalTags.where((t) => !have.contains(t.toLowerCase())).toList();
-    final offerSpeakers = !s.identifySpeakers;
-    if (!offerSpeakers && missing.isEmpty) return;
-    var speakers = offerSpeakers;
-    var tags = missing.isNotEmpty;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialog) => StatefulBuilder(
-        builder: (context, set) => AlertDialog(
-          title: const Text('Set up for clinical work?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Both are optional and can be changed later.'),
-              if (offerSpeakers)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: speakers,
-                  onChanged: (v) => set(() => speakers = v ?? false),
-                  title: const Text('Identify speakers'),
-                  subtitle: Text(_canTellSpeakers(s)
-                      ? 'Tells clinician and patient apart.'
-                      : 'Tells clinician and patient apart with Gemini or On '
-                          'this device. ${s.active.label} will not label them.'),
-                ),
-              if (missing.isNotEmpty)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: tags,
-                  onChanged: (v) => set(() => tags = v ?? false),
-                  title: Text('Add tags: ${missing.join(', ')}'),
-                  subtitle: const Text(
-                      'Notes get them automatically when summarised.'),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialog, false),
-                child: const Text('Not now')),
-            FilledButton(
-                onPressed: () => Navigator.pop(dialog, true),
-                child: const Text('Apply')),
+void _open(BuildContext context, Widget page) =>
+    Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+
+/// Offers the settings that suit clinical work. Anything already in place is
+/// not offered again.
+Future<void> _offerClinicalSetup(BuildContext context, AppState state) async {
+  final s = state.settings;
+  final have = state.approvedTags.map((t) => t.name.toLowerCase()).toSet();
+  final missing =
+      clinicalTags.where((t) => !have.contains(t.toLowerCase())).toList();
+  final offerSpeakers = !s.identifySpeakers;
+  if (!offerSpeakers && missing.isEmpty) return;
+  var speakers = offerSpeakers;
+  var tags = missing.isNotEmpty;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dialog) => StatefulBuilder(
+      builder: (context, set) => AlertDialog(
+        title: const Text('Set up for clinical work?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Both are optional and can be changed later.'),
+            if (offerSpeakers)
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: speakers,
+                onChanged: (v) => set(() => speakers = v ?? false),
+                title: const Text('Identify speakers'),
+                subtitle: Text(_canTellSpeakers(s)
+                    ? 'Tells clinician and patient apart.'
+                    : 'Tells clinician and patient apart with Gemini or On '
+                        'this device. ${s.active.label} will not label them.'),
+              ),
+            if (missing.isNotEmpty)
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: tags,
+                onChanged: (v) => set(() => tags = v ?? false),
+                title: Text('Add tags: ${missing.join(', ')}'),
+                subtitle:
+                    const Text('Notes get them automatically when summarised.'),
+              ),
           ],
         ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('Not now')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('Apply')),
+        ],
       ),
-    );
-    if (ok != true) return;
-    if (speakers) await s.setIdentifySpeakers(true);
-    if (tags) {
-      for (final t in missing) {
-        await state.createTag(t);
-      }
+    ),
+  );
+  if (ok != true) return;
+  if (speakers) await s.setIdentifySpeakers(true);
+  if (tags) {
+    for (final t in missing) {
+      await state.createTag(t);
     }
-    state.refresh();
   }
+  state.refresh();
+}
 
-  Widget _row(BuildContext context, IconData icon, String title, String status,
-          Widget page) =>
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key});
+
+  Widget _row(BuildContext context, IconData icon, String title,
+          String status, Widget page) =>
       ListTile(
         leading: Icon(icon),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(title),
         subtitle: Text(status),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () =>
-            Navigator.push(context, MaterialPageRoute(builder: (_) => page)),
+        onTap: () => _open(context, page),
       );
 
   @override
@@ -166,73 +198,143 @@ class _SettingsPageState extends State<SettingsPage> {
     final state = context.watch<AppState>();
     context.watch<ModelStore>();
     final s = state.settings;
+    final problem = setupProblem(s);
+    final speakersOff = speakersBlocked(s);
+    final translateOff = translateBlocked(s);
+    final waiting = state.suggestedTags.length;
+    final tags = state.approvedTags.length;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
-          const _Header('I use this for'),
-          SegmentedButton<UseCase>(
-            showSelectedIcon: false,
-            segments: [
-              for (final u in UseCase.values)
-                ButtonSegment(value: u, label: Text(u.label)),
-            ],
-            selected: {s.useCase},
-            onSelectionChanged: (v) => _setUseCase(state, v.first),
-          ),
-          if (s.clinical)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(4, 12, 4, 0),
-              child: Text(
-                'Adds a "Create clinical note" option to each transcript: an '
-                'interpretation, a formatted note in English and the spoken '
-                'language, and a list of items to verify. These are AI-generated '
-                'drafts and must be reviewed by a clinician. The text is sent '
-                'to your chosen provider; do not use it where patient data may '
-                'not leave your organisation.',
-              ),
+          if (problem != null)
+            _SetupBanner(
+              message: problem.message,
+              onTap: () => _open(
+                  context,
+                  switch (problem.fix) {
+                    SetupFix.keys => const _ApiKeysPage(),
+                    SetupFix.provider => const _ProviderPage(),
+                    SetupFix.writtenBy => const _WrittenByPage(),
+                  }),
             ),
-          const _Header('Setup'),
+          const _Header('Transcribe'),
           Card(
             child: Column(
               children: [
-                _row(context, Icons.mic_none, 'Transcription',
-                    transcriptionStatus(s), const _TranscriptionPage()),
+                _row(context, Icons.mic_none, 'Provider',
+                    transcriptionStatus(s), const _ProviderPage()),
                 const Divider(),
-                _row(context, Icons.tune, 'Transcription options',
-                    optionsStatus(s), const _OptionsPage()),
+                SwitchListTile(
+                  secondary: const Icon(Icons.translate),
+                  title: const Text('Translate to English'),
+                  subtitle: Text(translateOff ??
+                      'Also produce an English version. One extra request '
+                          'per recording.'),
+                  value: translateOff == null && s.translate,
+                  onChanged: translateOff != null
+                      ? null
+                      : (v) async {
+                          await s.setTranslate(v);
+                          state.refresh();
+                        },
+                ),
                 const Divider(),
-                _row(context, Icons.auto_awesome_outlined,
-                    'Titles, summaries and tags', textStatus(s, state),
-                    const _TextPage()),
+                SwitchListTile(
+                  secondary: const Icon(Icons.record_voice_over_outlined),
+                  title: const Text('Identify speakers'),
+                  subtitle: Text(speakersOff ?? _speakerHelp(s)),
+                  value: speakersOff == null && s.identifySpeakers,
+                  onChanged: speakersOff != null
+                      ? null
+                      : (v) async {
+                          await s.setIdentifySpeakers(v);
+                          state.refresh();
+                        },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.spellcheck),
+                  title: const Text('Custom dictionary'),
+                  subtitle: Text(s.dictionary.isEmpty
+                      ? 'Names and terms to get right'
+                      : '${s.dictionary.entries.length} '
+                          '${s.dictionary.entries.length == 1 ? 'word' : 'words'}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const DictionaryPage()));
+                    state.refresh();
+                  },
+                ),
               ],
             ),
           ),
-          const _Header('Recordings'),
+          const _Header('Write-up'),
           Card(
-            child: SwitchListTile(
-              title: const Text('Delete audio after transcribing'),
-              subtitle: const Text(
-                  'Keeps the text and removes the recording once it has '
-                  'been transcribed. Saves space; you can no longer play '
-                  'it back or transcribe it again.'),
-              value: s.deleteAudioAfter,
-              onChanged: (v) async {
-                await s.setDeleteAudioAfter(v);
-                state.refresh();
-              },
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.auto_awesome_outlined),
+                  title: const Text('Titles and summaries'),
+                  subtitle: const Text('Names and summarises each note.'),
+                  value: s.autoSummary,
+                  onChanged: (v) async {
+                    await s.setAutoSummary(v);
+                    state.refresh();
+                  },
+                ),
+                const Divider(),
+                _row(context, Icons.edit_note, 'Written by', writtenByStatus(s),
+                    const _WrittenByPage()),
+                const Divider(),
+                _row(
+                    context,
+                    Icons.sell_outlined,
+                    'Tags',
+                    waiting > 0
+                        ? '$waiting waiting for approval'
+                        : '$tags ${tags == 1 ? 'tag' : 'tags'}, picked '
+                            'automatically when a note is summarised',
+                    const TagsPage()),
+                const Divider(),
+                _row(context, Icons.medical_services_outlined,
+                    'Clinical notes', s.clinical ? 'On' : 'Off',
+                    const _ClinicalPage()),
+              ],
             ),
           ),
-          const _Header('Text size'),
+          const _Header('Recordings and display'),
           Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: TextSizeControl(
-                value: state.textScale,
-                onChanged: state.setTextScale,
-              ),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Delete audio after transcribing'),
+                  subtitle: const Text(
+                      'Keeps the text and removes the recording. Saves space; '
+                      'you can no longer play it back or transcribe it again.'),
+                  value: s.deleteAudioAfter,
+                  onChanged: (v) async {
+                    await s.setDeleteAudioAfter(v);
+                    state.refresh();
+                  },
+                ),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: TextSizeControl(
+                    value: state.textScale,
+                    onChanged: state.setTextScale,
+                  ),
+                ),
+              ],
             ),
+          ),
+          const _Header('Accounts'),
+          Card(
+            child: _row(context, Icons.key_outlined, 'API keys', keysStatus(s),
+                const _ApiKeysPage()),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 24, 4, 0),
@@ -263,6 +365,30 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
+/// Says what is missing before notes can be made, and opens the fix.
+class _SetupBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback onTap;
+  const _SetupBanner({required this.message, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: scheme.tertiaryContainer,
+      child: ListTile(
+        leading: Icon(Icons.warning_amber_rounded,
+            color: scheme.onTertiaryContainer),
+        title: Text(message,
+            style: TextStyle(color: scheme.onTertiaryContainer)),
+        trailing:
+            Icon(Icons.chevron_right, color: scheme.onTertiaryContainer),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
 /// A settings sub-page: a title and a list of cards.
 class _SubPage extends StatelessWidget {
   final String title;
@@ -279,9 +405,187 @@ class _SubPage extends StatelessWidget {
       );
 }
 
-/// Which provider transcribes, with its key or the offline models.
-class _TranscriptionPage extends StatelessWidget {
-  const _TranscriptionPage();
+/// Which provider transcribes, with the offline models for "On this device".
+class _ProviderPage extends StatelessWidget {
+  const _ProviderPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final models = context.watch<ModelStore>();
+    final s = state.settings;
+    return _SubPage(
+      title: 'Provider',
+      children: [
+        Card(
+          child: RadioGroup<ProviderId>(
+            groupValue: s.active,
+            onChanged: (v) async {
+              if (v == null) return;
+              await s.setActive(v);
+              state.refresh();
+            },
+            child: Column(
+              children: [
+                for (final id in ProviderId.values.where((p) => p.canTranscribe))
+                  RadioListTile<ProviderId>(
+                    value: id,
+                    title: Text(id.label,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text(id.blurb),
+                    secondary: id.needsKey
+                        ? _KeyStatus(saved: s.hasKey(id))
+                        : _KeyStatus(
+                            saved: s.isReady(id),
+                            yes: 'Model ready',
+                            no: 'No model'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (s.active == ProviderId.onDevice) ...[
+          Card(child: _OfflineModels(store: s, onChanged: state.refresh)),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _SpeakerModelsRow(
+                installed: models.isInstalled(speakerModelsId),
+                downloading: models.downloading == speakerModelsId,
+                busy: models.downloading != null,
+                progress: models.progress,
+                onDownload: () => _downloadModel(
+                    context, s, models, speakerModelsId, state.refresh),
+                onCancel: models.cancel,
+                onDelete: () async {
+                  await models.delete(speakerModelsId);
+                  state.refresh();
+                },
+              ),
+            ),
+          ),
+        ] else
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.key_outlined),
+              title: Text('${s.active.label} API key'),
+              subtitle: Text(s.hasKey(s.active) ? 'Saved' : 'Not added yet'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _open(context, const _ApiKeysPage()),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Who writes titles, summaries and clinical notes.
+class _WrittenByPage extends StatelessWidget {
+  const _WrittenByPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final s = state.settings;
+    String status(ProviderId id) =>
+        s.hasKey(id) ? 'Key saved' : 'Needs a key · add it in API keys';
+    return _SubPage(
+      title: 'Written by',
+      children: [
+        Card(
+          child: RadioGroup<ProviderId?>(
+            groupValue: s.enrichment,
+            onChanged: (v) async {
+              await s.setEnrichment(v);
+              state.refresh();
+            },
+            child: Column(
+              children: [
+                RadioListTile<ProviderId?>(
+                  value: null,
+                  enabled: s.active.canText,
+                  title: const Text('Same as transcription'),
+                  subtitle: Text(s.active.canText
+                      ? '${s.active.label} · ${status(s.active)}'
+                      : '${s.active.label} has no text model. Choose another '
+                          'provider; it is used when you are online.'),
+                ),
+                for (final id in ProviderId.values.where((p) => p.canText))
+                  RadioListTile<ProviderId?>(
+                    value: id,
+                    title: Text(id.label),
+                    subtitle: Text(id == ProviderId.openrouter
+                        ? 'Free models available · ${status(id)}'
+                        : status(id)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('API keys'),
+            subtitle: Text(keysStatus(s)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _open(context, const _ApiKeysPage()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Turns the clinical note on or off, with what it does.
+class _ClinicalPage extends StatelessWidget {
+  const _ClinicalPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final s = state.settings;
+    return _SubPage(
+      title: 'Clinical notes',
+      children: [
+        Card(
+          child: SwitchListTile(
+            title: const Text('Create clinical notes'),
+            subtitle: const Text(
+                'Adds a "Create clinical note" option to each transcript.'),
+            value: s.clinical,
+            onChanged: (v) async {
+              await s.setUseCase(v ? UseCase.clinical : UseCase.general);
+              state.refresh();
+              if (v && context.mounted) {
+                await _offerClinicalSetup(context, state);
+              }
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
+          child: Text(
+            'A clinical note has an interpretation, a formatted note in '
+            'English and the spoken language, and a list of items to verify. '
+            'These are AI-generated drafts and must be reviewed by a '
+            'clinician. The text is sent to the provider under Written by; do '
+            'not use it where patient data may not leave your organisation.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                height: 1.5),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Every provider's API key in one place, with its model names.
+class _ApiKeysPage extends StatelessWidget {
+  const _ApiKeysPage();
 
   Future<void> _openGuide(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -297,240 +601,157 @@ class _TranscriptionPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final s = state.settings;
+    final ids = ProviderId.values.where((p) => p.needsKey).toList();
     return _SubPage(
-      title: 'Transcription',
+      title: 'API keys',
       children: [
         Card(
           child: Column(
             children: [
-              RadioGroup<ProviderId>(
-                groupValue: s.active,
-                onChanged: (v) async {
-                  if (v == null) return;
-                  await s.setActive(v);
-                  state.refresh();
-                },
-                child: Column(
-                  children: [
-                    for (final id
-                        in ProviderId.values.where((p) => p.canTranscribe))
-                      RadioListTile<ProviderId>(
-                        value: id,
-                        title: Text(id.label,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Text(id.blurb),
-                        secondary: id.needsKey
-                            ? _KeyStatus(saved: s.hasKey(id))
-                            : _KeyStatus(
-                                saved: s.isReady(id),
-                                yes: 'Model ready',
-                                no: 'No model'),
-                      ),
-                  ],
-                ),
-              ),
-              const Divider(),
-              if (s.active == ProviderId.onDevice)
-                _OfflineModels(store: s, onChanged: state.refresh)
-              else
-                _KeyEditor(
-                  key: ValueKey(
-                      'editor_${s.active.name}_${s.textActive == s.active}'),
-                  id: s.active,
+              for (final id in ids) ...[
+                if (id != ids.first) const Divider(),
+                _KeyTile(
+                  key: ValueKey('key_${id.name}'),
+                  id: id,
                   store: s,
-                  showText: s.textActive == s.active,
                   onSaved: state.refresh,
                 ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.help_outline),
-                title: const Text('How to get an API key'),
-                subtitle: const Text(
-                    'Step-by-step guides for Sarvam, OpenAI and Gemini. '
-                    'As of October 2026, Gemini has a free tier.'),
-                trailing: const Icon(Icons.open_in_new, size: 18),
-                onTap: () => _openGuide(context),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Translation, speaker labels and the custom dictionary.
-class _OptionsPage extends StatelessWidget {
-  const _OptionsPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final models = context.watch<ModelStore>();
-    final s = state.settings;
-    return _SubPage(
-      title: 'Transcription options',
-      children: [
-        Card(
-          child: Column(
-            children: [
-              SwitchListTile(
-                title: const Text('Translate to English'),
-                subtitle: const Text(
-                    'Also produce an English version. Costs an extra request per recording.'),
-                value: s.translate,
-                onChanged: (v) async {
-                  await s.setTranslate(v);
-                  state.refresh();
-                },
-              ),
-              const Divider(),
-              SwitchListTile(
-                title: const Text('Identify speakers'),
-                subtitle: Text(_speakerHelp(s)),
-                value: s.identifySpeakers,
-                onChanged: (v) async {
-                  await s.setIdentifySpeakers(v);
-                  state.refresh();
-                },
-              ),
-              if (s.active == ProviderId.onDevice)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: _SpeakerModelsRow(
-                    installed: models.isInstalled(speakerModelsId),
-                    downloading: models.downloading == speakerModelsId,
-                    busy: models.downloading != null,
-                    progress: models.progress,
-                    onDownload: () => _downloadModel(
-                        context, s, models, speakerModelsId, state.refresh),
-                    onCancel: models.cancel,
-                    onDelete: () async {
-                      await models.delete(speakerModelsId);
-                      state.refresh();
-                    },
-                  ),
-                ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.spellcheck),
-                title: const Text('Custom dictionary'),
-                subtitle: Text(s.dictionary.isEmpty
-                    ? 'Names and terms to get right'
-                    : '${s.dictionary.entries.length} '
-                        '${s.dictionary.entries.length == 1 ? 'word' : 'words'}'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const DictionaryPage()));
-                  state.refresh();
-                },
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Titles, summaries and tags, and the provider that writes them.
-class _TextPage extends StatelessWidget {
-  const _TextPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final s = state.settings;
-    return _SubPage(
-      title: 'Titles, summaries and tags',
-      children: [
-        Card(
-          child: Column(
-            children: [
-              SwitchListTile(
-                title: const Text('Title and summary'),
-                subtitle: Text(s.textActive.canText
-                    ? 'Uses your provider\'s text model to name each note.'
-                    : 'On-device transcription has no text model. Turn on '
-                        '"Use a different provider for text" below to get '
-                        'titles and summaries when you are online.'),
-                value: s.autoSummary,
-                onChanged: (v) async {
-                  await s.setAutoSummary(v);
-                  state.refresh();
-                },
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.sell_outlined),
-                title: const Text('Tags'),
-                subtitle: Text(state.suggestedTags.isNotEmpty
-                    ? '${state.suggestedTags.length} suggested, waiting for '
-                        'your approval'
-                    : '${state.approvedTags.length} '
-                        '${state.approvedTags.length == 1 ? 'tag' : 'tags'}'
-                        ', picked automatically when a note is summarised'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const TagsPage())),
-              ),
-            ],
-          ),
-        ),
-        const _Header('Text provider'),
-        Card(
-          child: Column(
-            children: [
-              SwitchListTile(
-                title: const Text('Use a different provider for text'),
-                subtitle: const Text(
-                    'Titles, summaries and clinical notes can use another '
-                    'provider, such as a free OpenRouter model, instead of the '
-                    'transcription provider.'),
-                value: s.enrichment != null,
-                onChanged: (v) async {
-                  await s.setEnrichment(v ? ProviderId.openrouter : null);
-                  state.refresh();
-                },
-              ),
-              if (s.enrichment != null) ...[
-                const Divider(),
-                RadioGroup<ProviderId>(
-                  groupValue: s.enrichment,
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await s.setEnrichment(v);
-                    state.refresh();
-                  },
-                  child: Column(
-                    children: [
-                      for (final id
-                          in ProviderId.values.where((p) => p.canText))
-                        RadioListTile<ProviderId>(
-                          value: id,
-                          title: Text(id.label),
-                          secondary: _KeyStatus(saved: s.hasKey(id)),
-                        ),
-                    ],
-                  ),
-                ),
-                if (s.enrichment != s.active) ...[
-                  const Divider(),
-                  _KeyEditor(
-                    key: ValueKey('editor_text_${s.enrichment!.name}'),
-                    id: s.enrichment!,
-                    store: s,
-                    showStt: false,
-                    onSaved: state.refresh,
-                  ),
-                ],
               ],
             ],
           ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.help_outline),
+            title: const Text('How to get an API key'),
+            subtitle: const Text(
+                'Step-by-step guides for Sarvam, OpenAI and Gemini. '
+                'As of October 2026, Gemini has a free tier.'),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () => _openGuide(context),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One provider's key and model names. Changes save as you type.
+class _KeyTile extends StatefulWidget {
+  final ProviderId id;
+  final SettingsStore store;
+  final VoidCallback onSaved;
+  const _KeyTile({
+    super.key,
+    required this.id,
+    required this.store,
+    required this.onSaved,
+  });
+
+  @override
+  State<_KeyTile> createState() => _KeyTileState();
+}
+
+class _KeyTileState extends State<_KeyTile> {
+  late final _key = TextEditingController(text: widget.store.apiKey(widget.id));
+  late final _stt = TextEditingController(text: widget.store.sttModel(widget.id));
+  late final _text = TextEditingController(text: widget.store.textModel(widget.id));
+  bool _hide = true;
+  Timer? _pending;
+
+  @override
+  void dispose() {
+    if (_pending?.isActive ?? false) {
+      _pending!.cancel();
+      _save();
+    }
+    _key.dispose();
+    _stt.dispose();
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _changed(String _) {
+    _pending?.cancel();
+    _pending = Timer(const Duration(milliseconds: 400), _save);
+  }
+
+  Future<void> _save() async {
+    final id = widget.id;
+    final key = _key.text, stt = _stt.text, text = _text.text;
+    await widget.store.setApiKey(id, key);
+    await widget.store.setModels(id,
+        stt: id.canTranscribe ? stt : null, text: id.canText ? text : null);
+    widget.onSaved();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.store;
+    final id = widget.id;
+    final d = modelDefaults[id]!;
+    final uses = [
+      if (s.active == id) 'transcribes',
+      if (s.textActive == id) 'writes titles',
+    ];
+    return ExpansionTile(
+      shape: const Border(),
+      initiallyExpanded: !s.hasKey(id) && uses.isNotEmpty,
+      title: Text(id.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Text(uses.isEmpty
+          ? id.blurb
+          : 'In use: ${uses.join(' and ')}'),
+      trailing: _KeyStatus(saved: s.hasKey(id)),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      children: [
+        TextField(
+          controller: _key,
+          obscureText: _hide,
+          autocorrect: false,
+          enableSuggestions: false,
+          onChanged: _changed,
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            labelText: '${id.label} API key',
+            helperText: 'Saved as you type',
+            suffixIcon: IconButton(
+              icon: Icon(_hide ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _hide = !_hide),
+            ),
+          ),
+        ),
+        ExpansionTile(
+          shape: const Border(),
+          tilePadding: EdgeInsets.zero,
+          title: Text('Advanced: model names',
+              style: Theme.of(context).textTheme.bodyMedium),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          children: [
+            if (id.canTranscribe)
+              TextField(
+                controller: _stt,
+                autocorrect: false,
+                onChanged: _changed,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: 'Transcription model',
+                  helperText: 'Default: ${d.stt}',
+                ),
+              ),
+            if (id.canTranscribe && id.canText) const SizedBox(height: 12),
+            if (id.canText)
+              TextField(
+                controller: _text,
+                autocorrect: false,
+                onChanged: _changed,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: 'Text model (summary, clinical note)',
+                  helperText: 'Default: ${d.text}',
+                ),
+              ),
+          ],
         ),
       ],
     );
@@ -568,112 +789,6 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) =>
       SectionLabel(text, padding: const EdgeInsets.fromLTRB(4, 24, 4, 8));
 }
-
-class _KeyEditor extends StatefulWidget {
-  final ProviderId id;
-  final SettingsStore store;
-  final VoidCallback onSaved;
-  final bool showStt;
-  final bool showText;
-  const _KeyEditor({
-    super.key,
-    required this.id,
-    required this.store,
-    required this.onSaved,
-    this.showStt = true,
-    this.showText = true,
-  });
-
-  @override
-  State<_KeyEditor> createState() => _KeyEditorState();
-}
-
-class _KeyEditorState extends State<_KeyEditor> {
-  late final _key = TextEditingController(text: widget.store.apiKey(widget.id));
-  late final _stt = TextEditingController(text: widget.store.sttModel(widget.id));
-  late final _text = TextEditingController(text: widget.store.textModel(widget.id));
-  bool _hide = true;
-
-  @override
-  void dispose() {
-    _key.dispose();
-    _stt.dispose();
-    _text.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    await widget.store.setApiKey(widget.id, _key.text);
-    await widget.store.setModels(
-      widget.id,
-      stt: widget.showStt && widget.id.canTranscribe ? _stt.text : null,
-      text: widget.showText ? _text.text : null,
-    );
-    widget.onSaved();
-    if (mounted) {
-      FocusScope.of(context).unfocus();
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${widget.id.label} settings saved')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = modelDefaults[widget.id]!;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('${widget.id.label} API key',
-              style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _key,
-            obscureText: _hide,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              labelText: 'API key',
-              suffixIcon: IconButton(
-                icon: Icon(_hide ? Icons.visibility : Icons.visibility_off),
-                onPressed: () => setState(() => _hide = !_hide),
-              ),
-            ),
-          ),
-          if (widget.showStt && widget.id.canTranscribe) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _stt,
-              autocorrect: false,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                labelText: 'Transcription model',
-                helperText: 'Default: ${d.stt}',
-              ),
-            ),
-          ],
-          if (widget.showText) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _text,
-              autocorrect: false,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                labelText: 'Text model (summary, clinical note)',
-                helperText: 'Default: ${d.text}',
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          FilledButton(onPressed: _save, child: const Text('Save')),
-        ],
-      ),
-    );
-  }
-}
-
 String _size(int bytes) {
   final mb = bytes / (1024 * 1024);
   return mb >= 1000 ? '${(mb / 1024).toStringAsFixed(1)} GB' : '${mb.round()} MB';
@@ -945,7 +1060,7 @@ class _SpeakerModelsRow extends StatelessWidget {
                 children: [
                   Text('Speaker models · ${_size(speakerSegmentationFile.size + speakerEmbeddingFile.size)}',
                       style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text('Tell voices apart. Used when "Identify speakers" is on.',
+                  Text('Tell voices apart. Needed for "Identify speakers".',
                       style: theme.textTheme.bodySmall),
                 ],
               ),

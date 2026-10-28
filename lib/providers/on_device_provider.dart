@@ -112,7 +112,7 @@ class OnDeviceProvider implements AiProvider {
 
   static const _noText = ProviderException(
       'On-device transcription has no text model. Choose a text provider '
-      'under Settings > Titles, summaries and tags.');
+      'under Settings > Written by.');
 }
 
 class _Job {
