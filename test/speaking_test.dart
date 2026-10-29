@@ -63,6 +63,23 @@ void main() {
           isNull);
     });
 
+    test('a speaker renamed "Me" counts as you', () {
+      final n = _note(const [
+        TimedLine(0, 1000, 'mine', speaker: 'S1'),
+        TimedLine(1000, 2000, 'theirs', speaker: 'S2'),
+      ]).copyWith(speakerNames: {'S1': 'Me'});
+      expect(speakingSample(n)!.mine, 'mine');
+    });
+
+    test('templates see who said each line', () {
+      final n = _note(const [
+        TimedLine(0, 1000, 'I will send it', speaker: youSpeakerId),
+        TimedLine(1000, 2000, 'Thanks', speaker: 'S2'),
+      ]).copyWith(speakerNames: {'S2': 'Asha'});
+      expect(labelledText(n), 'You: I will send it\nAsha: Thanks');
+      expect(labelledText(_note(const [], transcript: 'plain')), 'plain');
+    });
+
     test('a note with no speaker labels is all yours', () {
       final s = speakingSample(_note(const [], transcript: 'just me'))!;
       expect(s.mine, 'just me');

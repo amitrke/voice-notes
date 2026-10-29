@@ -43,8 +43,11 @@ const builtInTemplates = [
     builtIn: true,
     instructions: 'Write meeting minutes: an "Overview" of what was '
         'discussed, the "Decisions" made, and "Action items" with the owner '
-        'and due date where they were mentioned. List items one per line '
-        'starting with "- ". Add "Attendees" only if people were named.',
+        'and due date where they were mentioned. When a speaker takes on a '
+        'task ("I will…"), they own it; name them as the transcript labels '
+        'them. List items one per line starting with "- ". Add "Attendees" '
+        'only for people who spoke and whose names are known; someone who '
+        'is only mentioned did not attend.',
   ),
   NoteTemplate(
     id: 'todo',
@@ -123,12 +126,17 @@ const fillerWords = [
         : lines.fold<int>(0, (a, l) => a + l.endMs - l.startMs);
     return (text: text, mine: text, ms: ms);
   }
-  final mine = lines.where((l) => l.speaker == youSpeakerId).toList();
+  // Recognised by voice, or renamed "You" or "Me" on the note.
+  bool isYou(String? id) =>
+      id == youSpeakerId ||
+      const {'you', 'me'}
+          .contains(n.speakerNames[id]?.trim().toLowerCase());
+  final mine = lines.where((l) => isYou(l.speaker)).toList();
   if (mine.isEmpty) return null;
   return (
     text: [
       for (final l in lines)
-        '${l.speaker == youSpeakerId ? 'You' : 'Other'}: ${l.text.trim()}',
+        '${isYou(l.speaker) ? 'You' : 'Other'}: ${l.text.trim()}',
     ].join('\n'),
     mine: mine.map((l) => l.text.trim()).join(' '),
     ms: mine.fold<int>(0, (a, l) => a + l.endMs - l.startMs),
@@ -166,7 +174,7 @@ OutputSection speakingNumbers(({String text, String mine, int ms}) s) {
       '- You spoke for ${(s.ms / 1000).round()} s',
     total == 0
         ? '- No filler words counted'
-        : '- Filler words: $total (${fillers.entries.take(4).map((e) => '"${e.key}" ${e.value}').join(', ')})',
+        : '- Filler words: $total (${fillers.entries.map((e) => '"${e.key}" ${e.value}').join(', ')})',
   ].join('\n'));
 }
 
@@ -273,20 +281,40 @@ TemplateOutput templateOutputFromReply(NoteTemplate t, String reply) {
   return TemplateOutput(t.id, t.name, sections);
 }
 
+/// [n]'s text with each line led by who said it ("You", a name the user
+/// gave, or "Speaker 2"), so templates can tell who said what. Plain text
+/// when the note has no speaker labels. [english] picks the translation.
+String labelledText(Note n, {bool english = false}) {
+  final lines = [for (final s in n.segments) ...s.lines];
+  if (!lines.any((l) => l.speaker != null)) {
+    return english ? n.english : n.transcript;
+  }
+  return [
+    for (final l in lines)
+      if ((english && l.english.isNotEmpty ? l.english : l.text)
+          .trim()
+          .isNotEmpty)
+        '${l.speaker == null ? '' : '${n.speakerLabel(l.speaker!)}: '}'
+            '${(english && l.english.isNotEmpty ? l.english : l.text).trim()}',
+  ].join('\n');
+}
+
 /// Runs template [t] on note [n].
 Future<TemplateOutput> buildTemplateOutput(
     AiProvider provider, NoteTemplate t, Note n) async {
   if (t.id != speakingTemplateId) {
     return templateOutputFromReply(
         t,
-        await provider.completeJson(
-            templatePrompt(t, transcript: n.transcript, english: n.english)));
+        await provider.completeJson(templatePrompt(t,
+            transcript: labelledText(n),
+            english: n.english.isEmpty ? '' : labelledText(n, english: true))));
   }
   final s = speakingSample(n);
   if (s == null) {
     throw const ProviderException(
-        'Speaking feedback needs to know which voice is yours. Set up Your '
-        'voice in Settings, turn on Identify speakers, and record again.');
+        'Speaking feedback needs to know which voice is yours. Rename your '
+        'speaker "You" on this note, or set up Your voice in Settings for '
+        'future recordings.');
   }
   if (s.mine.trim().isEmpty) {
     throw const ProviderException('There is no speech to give feedback on.');
