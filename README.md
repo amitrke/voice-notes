@@ -59,17 +59,21 @@ SRT export.
 - **Share to the app** (Android): audio and video shared from other apps become notes
   (`SharedAudio.kt`, `lib/services/share_intake.dart`). iOS has no share extension yet.
 
-### Enrichment (titles, summaries, clinical notes)
+### Enrichment (titles, summaries, templates)
 
-Text work can use a different provider from transcription (Settings > Enrichment). OpenRouter is available
+Text work can use a different provider from transcription (Settings > Written by). OpenRouter is available
 there as a text-only option (default model `openrouter/free`, which picks an available free model). It cannot
 transcribe audio, so it is not offered as the transcription provider.
 
-### Clinical mode
+### Templates
 
-Settings > "I use this for" > Clinical work adds a "Create clinical note" button to each transcript: an
-interpretation, a clinical note in English and the spoken language, and items to verify, with TXT export.
-Output is an AI-generated draft and must be reviewed by a clinician.
+"Turn into…" on a note runs a template: meeting minutes, a to-do list, a recipe, a grammar review, a clinical
+note, or one the user wrote (Settings > Templates). Each is one request to the text provider; the result is
+stored on the note (`outputs` column, `lib/data/templates.dart`) and goes out of date with the summary.
+
+The clinical template keeps its own report and screen: an interpretation, a clinical note in English and the
+spoken language, and items to verify, with TXT export. It is off by default (on for users who had chosen
+clinical work before). Output is an AI-generated draft and must be reviewed by a clinician.
 
 ## Privacy
 

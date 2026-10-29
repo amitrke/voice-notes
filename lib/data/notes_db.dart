@@ -48,7 +48,7 @@ class NotesDb {
   final Database _db;
   NotesDb._(this._db);
 
-  static const version = 6;
+  static const version = 7;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi.
@@ -77,7 +77,8 @@ class NotesDb {
               enriched_hash TEXT,
               folder_id INTEGER,
               speakers TEXT,
-              tags_edited INTEGER NOT NULL DEFAULT 0
+              tags_edited INTEGER NOT NULL DEFAULT 0,
+              outputs TEXT
             )''');
           await db.execute(_segmentsTable);
           await db.execute(_foldersTable);
@@ -97,6 +98,7 @@ class NotesDb {
                 type: 'INTEGER NOT NULL DEFAULT 0');
             await _addTags(db);
           }
+          if (from < 7) await _addColumn(db, 'notes', 'outputs');
         },
       ),
     );

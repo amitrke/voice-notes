@@ -15,29 +15,6 @@ Future<SettingsStore> _load(Map<String, Object> prefs) async {
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
-  group('use case', () {
-    test('defaults to general notes', () async {
-      final s = await _load({});
-      expect(s.useCase, UseCase.general);
-      expect(s.clinical, isFalse);
-    });
-
-    test('carries over the old clinical switch', () async {
-      expect((await _load({'clinical': true})).useCase, UseCase.clinical);
-      expect((await _load({'clinical': false})).useCase, UseCase.general);
-    });
-
-    test('a saved use case wins over the old switch and persists', () async {
-      final s = await _load({'clinical': true, 'useCase': 'general'});
-      expect(s.useCase, UseCase.general);
-      await s.setUseCase(UseCase.clinical);
-      expect(s.clinical, isTrue);
-      final again = SettingsStore();
-      await again.load();
-      expect(again.useCase, UseCase.clinical);
-    });
-  });
-
   group('status lines', () {
     test('transcription names the provider and whether it is ready', () async {
       final s = await _load({'active': 'gemini'});

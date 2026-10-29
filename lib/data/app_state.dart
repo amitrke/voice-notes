@@ -9,6 +9,7 @@ import '../ui/format.dart';
 import 'find_replace.dart';
 import 'notes_db.dart';
 import 'settings_store.dart';
+import 'templates.dart';
 
 class AppState extends ChangeNotifier {
   final SettingsStore settings;
@@ -574,8 +575,50 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Regenerates the title and summary, and the clinical note if the note has
-  /// one, from the combined text of all recordings. Clears the out-of-date
+  /// Turns note [id] into what template [t] describes, replacing anything
+  /// that template made before. Returns an error message, or null on success.
+  Future<String?> applyTemplate(int id, NoteTemplate t) async {
+    if (t.isClinical) return enrichClinical(id);
+    final n = byId(id);
+    if (n == null) return null;
+    final provider = settings.build(settings.textActive);
+    if (provider == null || !settings.textActive.canText) return _noTextProvider;
+    try {
+      final out = await buildTemplateOutput(provider, t,
+          transcript: n.transcript, english: n.english);
+      final hash = n.hasEnrichment && n.isStale
+          ? n.enrichedHash
+          : textHash(n.transcript, n.english);
+      await _edit(
+          id,
+          (n) => n.copyWith(
+              outputs: _withOutput(n.outputs, out), enrichedHash: hash));
+      return null;
+    } catch (e) {
+      return _describe(e);
+    }
+  }
+
+  static List<TemplateOutput> _withOutput(
+          List<TemplateOutput> all, TemplateOutput out) =>
+      [
+        for (final o in all)
+          if (o.templateId != out.templateId) o,
+        out,
+      ];
+
+  /// Removes what template [templateId] made from note [id].
+  Future<void> deleteOutput(int id, String templateId) => _edit(
+      id,
+      (n) => n.copyWith(
+          outputs: [
+        for (final o in n.outputs)
+          if (o.templateId != templateId) o,
+      ]));
+
+  /// Regenerates the title and summary, the clinical note if the note has
+  /// one, and anything else templates made from it, from the combined text of
+  /// all recordings. Clears the out-of-date
   /// flag only if everything succeeded. Returns an error message or null.
   Future<String?> regenerate(int id) async {
     final n = byId(id);
@@ -593,12 +636,23 @@ class AppState extends ChangeNotifier {
               english: n.english,
               language: languageLabel(n.languageCode),
             );
+      // A template the user has since deleted can't be rerun; its output
+      // stays as it was.
+      final outputs = [
+        for (final o in n.outputs)
+          switch (settings.template(o.templateId)) {
+            final t? => await buildTemplateOutput(provider, t,
+                transcript: n.transcript, english: n.english),
+            null => o,
+          },
+      ];
       await _edit(
           id,
           (cur) => cur.copyWith(
                 title: s.title.isEmpty ? cur.title : s.title,
                 summary: s.summary,
                 clinical: report,
+                outputs: outputs,
                 // The text the new summary was made from, not the latest: if
                 // a recording landed meanwhile the note stays out of date.
                 enrichedHash: textHash(n.transcript, n.english),

@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/app_state.dart';
 import '../data/srt_export.dart';
+import '../data/templates.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import 'audio_input.dart';
@@ -18,6 +19,7 @@ import 'folders.dart';
 import 'format.dart';
 import 'stale_banner.dart';
 import 'tags.dart';
+import 'templates_ui.dart';
 import 'text_size.dart';
 import 'theme.dart';
 
@@ -49,12 +51,45 @@ class _NotePageState extends State<NotePage> {
     await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 
-  Future<void> _enrich(AppState state, int id) async {
+  /// Opens what template [templateId] made from note [id].
+  void _openOutput(int id, String templateId) => Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => templateId == clinicalTemplateId
+              ? ClinicalPage(noteId: id)
+              : TemplateOutputPage(noteId: id, templateId: templateId)));
+
+  bool _made(Note n, String templateId) => templateId == clinicalTemplateId
+      ? n.clinical != null
+      : n.output(templateId) != null;
+
+  /// Asks which template to use, makes it unless it already exists, and
+  /// opens the result.
+  Future<void> _turnInto(AppState state, Note note) async {
+    final made = {
+      for (final t in state.settings.allTemplates)
+        if (_made(note, t.id)) t.id,
+    };
+    final choice = await showTurnIntoSheet(context, state, made);
+    if (!mounted || choice == null) return;
+    final NoteTemplate? t = switch (choice) {
+      UseTemplate(:final template) => template,
+      MakeTemplate() => await editTemplate(context, state, null),
+    };
+    if (t == null || !mounted) return;
+    if (made.contains(t.id)) {
+      _openOutput(note.id!, t.id);
+      return;
+    }
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _enriching = true);
-    final err = await state.enrichClinical(id);
+    final err = await state.applyTemplate(note.id!, t);
     if (mounted) setState(() => _enriching = false);
-    if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
+    if (err != null) {
+      messenger.showSnackBar(SnackBar(content: Text(err)));
+    } else if (mounted) {
+      _openOutput(note.id!, t.id);
+    }
   }
 
   bool _regenerating = false;
@@ -212,8 +247,8 @@ class _NotePageState extends State<NotePage> {
               if (note.status == NoteStatus.done)
                 PopupMenuItem(
                     value: 'regenerate',
-                    child: Text(note.clinical != null
-                        ? 'Regenerate summary and clinical note'
+                    child: Text(note.clinical != null || note.outputs.isNotEmpty
+                        ? 'Regenerate summary and what was made from it'
                         : 'Regenerate summary')),
               if (hasTimedText(note))
                 PopupMenuItem(
@@ -308,9 +343,10 @@ class _NotePageState extends State<NotePage> {
           const SizedBox(height: 12),
           if (note.isStale && note.status != NoteStatus.processing) ...[
             StaleBanner(
-              message: note.clinical != null
-                  ? 'Recordings changed after the title, summary and clinical '
-                      'note were written, so they may no longer match.'
+              message: note.clinical != null || note.outputs.isNotEmpty
+                  ? 'Recordings changed after the title, summary and what was '
+                      'made from this note were written, so they may no '
+                      'longer match.'
                   : 'Recordings changed after the title and summary were '
                       'written, so they may no longer match.',
               busy: _regenerating,
@@ -400,59 +436,59 @@ class _NotePageState extends State<NotePage> {
                 ),
               ),
             if (note.transcript.trim().isNotEmpty)
-              ..._clinicalEntry(state, note),
+              ..._templatesEntry(state, note),
           ],
         ],
       ),
     );
   }
 
-  /// A button that writes the clinical note, or a card that opens it.
-  List<Widget> _clinicalEntry(AppState state, Note note) {
-    void open() => Navigator.push(context,
-        MaterialPageRoute(builder: (_) => ClinicalPage(noteId: note.id!)));
-    final c = note.clinical;
-    if (c == null) {
-      if (!state.settings.clinical) return const [];
-      return [
-        const SizedBox(height: 24),
-        FilledButton.icon(
-          onPressed: _enriching
-              ? null
-              : () async {
-                  await _enrich(state, note.id!);
-                  if (mounted && state.byId(note.id!)?.clinical != null) {
-                    open();
-                  }
-                },
-          icon: _enriching
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.medical_services_outlined),
-          label: Text(_enriching ? 'Working…' : 'Create clinical note'),
-        ),
-      ];
-    }
+  /// What was made from the note with templates, and the "Turn into…"
+  /// button.
+  List<Widget> _templatesEntry(AppState state, Note note) {
     final scheme = Theme.of(context).colorScheme;
+    final c = note.clinical;
+    Widget card(String templateId, String name, String detail) => Card(
+          child: ListTile(
+            contentPadding: const EdgeInsets.fromLTRB(16, 6, 12, 6),
+            leading: Icon(templateIcon(templateId), color: scheme.primary),
+            title: Text(name,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle:
+                Text(note.isStale ? 'Out of date. Regenerate before use.' : detail),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _openOutput(note.id!, templateId),
+          ),
+        );
+    final cards = [
+      if (c != null)
+        card(
+            clinicalTemplateId,
+            'Clinical note',
+            c.verify.isEmpty
+                ? 'Interpretation and note'
+                : 'Interpretation, note and ${c.verify.length} '
+                    '${c.verify.length == 1 ? 'item' : 'items'} to verify'),
+      for (final o in note.outputs)
+        card(o.templateId, o.name,
+            o.sections.map((s) => s.heading).where((h) => h.isNotEmpty).join(', ')),
+    ];
     return [
-      const SizedBox(height: 24),
-      Card(
-        child: ListTile(
-          contentPadding: const EdgeInsets.fromLTRB(16, 6, 12, 6),
-          leading: Icon(Icons.medical_services_outlined, color: scheme.primary),
-          title: const Text('Clinical note',
-              style: TextStyle(fontWeight: FontWeight.w600)),
-          subtitle: Text(note.isStale
-              ? 'Out of date. Regenerate before use.'
-              : c.verify.isEmpty
-                  ? 'Interpretation and note'
-                  : 'Interpretation, note and ${c.verify.length} '
-                      '${c.verify.length == 1 ? 'item' : 'items'} to verify'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: open,
-        ),
+      if (cards.isNotEmpty) ...[
+        const SectionLabel('Made from this note',
+            padding: EdgeInsets.fromLTRB(4, 24, 4, 8)),
+        ...cards,
+      ],
+      const SizedBox(height: 16),
+      FilledButton.icon(
+        onPressed: _enriching ? null : () => _turnInto(state, note),
+        icon: _enriching
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.auto_fix_high),
+        label: Text(_enriching ? 'Working…' : 'Turn into…'),
       ),
     ];
   }

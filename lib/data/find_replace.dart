@@ -1,5 +1,6 @@
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import 'templates.dart';
 
 /// Replaces one piece of text with another, the same way everywhere it is
 /// applied: plain text (not a pattern), optionally matching case.
@@ -28,14 +29,19 @@ int countInNote(Note n, TextReplacer r) =>
     r.count(n.transcript) +
     r.count(n.english);
 
-/// [n] with [r] applied to its title, summary, clinical note and every
+/// [n] with [r] applied to its title, summary, clinical note, template
+/// outputs and every
 /// recording's text. [changed] holds the recordings whose text changed, which
 /// the caller must save. Returns null when nothing matched.
 ///
 /// A summary that was up to date stays up to date: it was edited along with
 /// the transcript. One that was already out of date stays flagged.
 ({Note note, List<Segment> changed})? replaceInNote(Note n, TextReplacer r) {
-  if (countInNote(n, r) == 0 && !_clinicalMatches(n.clinical, r)) return null;
+  if (countInNote(n, r) == 0 &&
+      !_clinicalMatches(n.clinical, r) &&
+      !n.outputs.any((o) => r.count(o.text) > 0)) {
+    return null;
+  }
   final changed = <Segment>[];
   final segments = <Segment>[];
   for (final s in n.segments) {
@@ -69,6 +75,13 @@ int countInNote(Note n, TextReplacer r) =>
                 noteNative: r.apply(c.noteNative),
                 verify: [for (final v in c.verify) r.apply(v)],
               ),
+        outputs: [
+          for (final o in n.outputs)
+            TemplateOutput(o.templateId, o.name, [
+              for (final s in o.sections)
+                OutputSection(r.apply(s.heading), r.apply(s.body)),
+            ]),
+        ],
       )
       .withSegments(segments);
   final wasCurrent = n.hasEnrichment && !n.isStale;

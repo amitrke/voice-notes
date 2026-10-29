@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +12,7 @@ import '../providers/sarvam_provider.dart';
 import '../services/audio_converter.dart';
 import '../services/model_store.dart';
 import 'dictionary.dart';
+import 'templates.dart';
 import 'text_scale.dart';
 
 class ModelDefaults {
@@ -25,15 +28,6 @@ const modelDefaults = {
   ProviderId.openrouter: ModelDefaults('', 'openrouter/free'),
   ProviderId.onDevice: ModelDefaults('', ''),
 };
-
-/// What the user records, which decides the extra features offered.
-enum UseCase {
-  general('General notes'),
-  clinical('Clinical work');
-
-  final String label;
-  const UseCase(this.label);
-}
 
 /// API keys live in the platform keystore/keychain; everything else in
 /// SharedPreferences. Values are cached in memory after [load].
@@ -57,11 +51,28 @@ class SettingsStore {
   ProviderId? enrichment;
   bool translate = true;
   bool autoSummary = true;
-  UseCase useCase = UseCase.general;
   double textScale = defaultTextScale;
 
-  /// Adds the clinical note to transcripts.
-  bool get clinical => useCase == UseCase.clinical;
+  /// Ids of the built-in templates offered under "Turn into…". The user's
+  /// own templates are always offered.
+  Set<String> templatesOn = {};
+
+  /// Templates the user wrote.
+  List<NoteTemplate> customTemplates = [];
+
+  /// Notes can be turned into a clinical note.
+  bool get clinical => templatesOn.contains(clinicalTemplateId);
+
+  List<NoteTemplate> get allTemplates =>
+      [...builtInTemplates, ...customTemplates];
+
+  /// The templates offered under "Turn into…".
+  List<NoteTemplate> get enabledTemplates => allTemplates
+      .where((t) => !t.builtIn || templatesOn.contains(t.id))
+      .toList();
+
+  NoteTemplate? template(String id) =>
+      allTemplates.where((t) => t.id == id).firstOrNull;
 
   /// Remove a recording's audio file once its text has been saved.
   bool deleteAudioAfter = false;
@@ -85,13 +96,19 @@ class SettingsStore {
     enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
-    // Before use cases, clinical mode was a plain on/off setting.
-    useCase = UseCase.values
-            .where((u) => u.name == _prefs.getString('useCase'))
-            .firstOrNull ??
-        ((_prefs.getBool('clinical') ?? false)
-            ? UseCase.clinical
-            : UseCase.general);
+    // Before templates, clinical notes came from a use case setting, and
+    // before that from a plain on/off switch.
+    final useCase = _prefs.getString('useCase');
+    final wasClinical = useCase == null
+        ? (_prefs.getBool('clinical') ?? false)
+        : useCase == 'clinical';
+    templatesOn = _prefs.getStringList('templatesOn')?.toSet() ??
+        {
+          for (final t in builtInTemplates)
+            if (!t.isClinical) t.id,
+          if (wasClinical) clinicalTemplateId,
+        };
+    customTemplates = _customFrom(_prefs.getString('customTemplates'));
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -184,9 +201,42 @@ class SettingsStore {
     await _prefs.setDouble('textScale', textScale);
   }
 
-  Future<void> setUseCase(UseCase v) async {
-    useCase = v;
-    await _prefs.setString('useCase', v.name);
+  Future<void> setTemplateOn(String id, bool on) async {
+    templatesOn = {...templatesOn}..remove(id);
+    if (on) templatesOn.add(id);
+    await _prefs.setStringList('templatesOn', templatesOn.toList());
+  }
+
+  /// Adds [t], or replaces the user's template with the same id.
+  Future<void> saveTemplate(NoteTemplate t) async {
+    final i = customTemplates.indexWhere((e) => e.id == t.id);
+    customTemplates = [...customTemplates];
+    if (i < 0) {
+      customTemplates.add(t);
+    } else {
+      customTemplates[i] = t;
+    }
+    await _saveCustom();
+  }
+
+  Future<void> deleteTemplate(String id) async {
+    customTemplates = customTemplates.where((t) => t.id != id).toList();
+    await _saveCustom();
+  }
+
+  Future<void> _saveCustom() => _prefs.setString('customTemplates',
+      jsonEncode([for (final t in customTemplates) t.toJson()]));
+
+  static List<NoteTemplate> _customFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return [
+        for (final j in jsonDecode(raw) as List)
+          NoteTemplate.fromJson(j as Map<String, dynamic>),
+      ].where((t) => t.id.isNotEmpty && t.name.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<void> setAutoSummary(bool v) async {

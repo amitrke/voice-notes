@@ -11,11 +11,10 @@ import '../services/model_store.dart';
 import 'dictionary_page.dart';
 import 'links.dart';
 import 'tags.dart';
+import 'templates_ui.dart';
 import 'text_size.dart';
 import 'theme.dart';
 
-/// Tags offered when the user turns on clinical notes.
-const clinicalTags = ['Patient', 'Follow-up'];
 
 /// The provider can label who is speaking.
 bool _canTellSpeakers(SettingsStore s) =>
@@ -69,6 +68,14 @@ String writtenByStatus(SettingsStore s) {
       : '${s.active.label} can\'t write text. Choose a provider.';
 }
 
+/// How many templates "Turn into…" offers.
+String templatesStatus(SettingsStore s) {
+  final n = s.enabledTemplates.length;
+  return n == 0
+      ? 'None turned on'
+      : '$n ${n == 1 ? 'template' : 'templates'} under "Turn into…"';
+}
+
 /// Which providers have a key saved.
 String keysStatus(SettingsStore s) {
   final saved = [
@@ -117,70 +124,6 @@ enum SetupFix { keys, provider, writtenBy }
 
 void _open(BuildContext context, Widget page) =>
     Navigator.push(context, MaterialPageRoute(builder: (_) => page));
-
-/// Offers the settings that suit clinical work. Anything already in place is
-/// not offered again.
-Future<void> _offerClinicalSetup(BuildContext context, AppState state) async {
-  final s = state.settings;
-  final have = state.approvedTags.map((t) => t.name.toLowerCase()).toSet();
-  final missing =
-      clinicalTags.where((t) => !have.contains(t.toLowerCase())).toList();
-  final offerSpeakers = !s.identifySpeakers;
-  if (!offerSpeakers && missing.isEmpty) return;
-  var speakers = offerSpeakers;
-  var tags = missing.isNotEmpty;
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (dialog) => StatefulBuilder(
-      builder: (context, set) => AlertDialog(
-        title: const Text('Set up for clinical work?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Both are optional and can be changed later.'),
-            if (offerSpeakers)
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: speakers,
-                onChanged: (v) => set(() => speakers = v ?? false),
-                title: const Text('Identify speakers'),
-                subtitle: Text(_canTellSpeakers(s)
-                    ? 'Tells clinician and patient apart.'
-                    : 'Tells clinician and patient apart with Gemini or On '
-                        'this device. ${s.active.label} will not label them.'),
-              ),
-            if (missing.isNotEmpty)
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: tags,
-                onChanged: (v) => set(() => tags = v ?? false),
-                title: Text('Add tags: ${missing.join(', ')}'),
-                subtitle:
-                    const Text('Notes get them automatically when summarised.'),
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dialog, false),
-              child: const Text('Not now')),
-          FilledButton(
-              onPressed: () => Navigator.pop(dialog, true),
-              child: const Text('Apply')),
-        ],
-      ),
-    ),
-  );
-  if (ok != true) return;
-  if (speakers) await s.setIdentifySpeakers(true);
-  if (tags) {
-    for (final t in missing) {
-      await state.createTag(t);
-    }
-  }
-  state.refresh();
-}
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -301,9 +244,8 @@ class SettingsPage extends StatelessWidget {
                             'automatically when a note is summarised',
                     const TagsPage()),
                 const Divider(),
-                _row(context, Icons.medical_services_outlined,
-                    'Clinical notes', s.clinical ? 'On' : 'Off',
-                    const _ClinicalPage()),
+                _row(context, Icons.auto_fix_high, 'Templates',
+                    templatesStatus(s), const TemplatesPage()),
               ],
             ),
           ),
@@ -542,50 +484,6 @@ class _WrittenByPage extends StatelessWidget {
             subtitle: Text(keysStatus(s)),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _open(context, const _ApiKeysPage()),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Turns the clinical note on or off, with what it does.
-class _ClinicalPage extends StatelessWidget {
-  const _ClinicalPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final s = state.settings;
-    return _SubPage(
-      title: 'Clinical notes',
-      children: [
-        Card(
-          child: SwitchListTile(
-            title: const Text('Create clinical notes'),
-            subtitle: const Text(
-                'Adds a "Create clinical note" option to each transcript.'),
-            value: s.clinical,
-            onChanged: (v) async {
-              await s.setUseCase(v ? UseCase.clinical : UseCase.general);
-              state.refresh();
-              if (v && context.mounted) {
-                await _offerClinicalSetup(context, state);
-              }
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
-          child: Text(
-            'A clinical note has an interpretation, a formatted note in '
-            'English and the spoken language, and a list of items to verify. '
-            'These are AI-generated drafts and must be reviewed by a '
-            'clinician. The text is sent to the provider under Written by; do '
-            'not use it where patient data may not leave your organisation.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                height: 1.5),
           ),
         ),
       ],
