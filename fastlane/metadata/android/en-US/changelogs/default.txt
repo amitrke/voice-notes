@@ -4,4 +4,4 @@
 • Tags, folders, speaker labels, a custom dictionary, and find and replace
 • Share audio into the app from other apps
 • A redesigned look and simpler Settings
-• Your notes now move with you to a new phone
+• Back up your notes to a file and restore them on a new phone

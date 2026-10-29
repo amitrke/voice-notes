@@ -1,1 +1,1 @@
-Record or import audio and get a transcript, an English translation and a summary. Use your own Sarvam, OpenAI or Gemini key. Your notes stay on your device.
+Transcribe on your iPhone, offline and free, or with your own Sarvam, OpenAI or Gemini key. Get titles, summaries and templates. Your notes stay on your device.
