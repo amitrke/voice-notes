@@ -56,7 +56,8 @@ the files in a pull request like any other change.
 - `listing` uploads them alone. On Play they go live once Google accepts them. On the App Store most fields can
   change only on a version being prepared, so `listing` creates or updates the version in pubspec without
   submitting it; promotional text, description, URLs and release notes can also change on the live version.
-- `check` downloads the live listings and prints how they differ from the repository (in the run's summary). It
+- `check` downloads the live listings and prints how they differ from the repository (in the run's summary),
+  except App Review details, which it lists by file name only (see below). It
   changes nothing, but it still needs the store keys, so like the other actions it runs from `main` only and
   waits for approval. It compares the listings on `main`, so merge listing edits there before checking them.
   Run it before the first `release` or `listing`, and whenever someone may have edited a listing in a console,
@@ -65,6 +66,15 @@ the files in a pull request like any other change.
 App Review notes are in `fastlane/metadata/ios/review_information/notes.txt`. Contact details are left out on
 purpose, so App Store Connect keeps the ones already there. Each upload removes the App Review attachment unless
 there is a file at `fastlane/review_attachment.mp4`, so the notes must not promise one that is not in the repo.
+
+The repository and its Actions logs are public, so nothing private goes in either:
+
+- A key for reviewers to test with lives in the `production` environment secret `APP_REVIEW_GEMINI_KEY`
+  (optional). Uploads add it to the end of the notes, from a temporary copy of the metadata, so deliver's printed
+  summary never contains it. Use a dedicated free-tier key, never a personal one, and revoke it after approval.
+- `check` lists the App Review and trade representative files by name only and never prints what is in them.
+  The first `check` (29 October 2026) did print them, before this rule, so the reviewer key that was in the live
+  notes then is public and must stay revoked.
 
 To run a lane on your own machine (Ruby and Bundler needed): `bundle install`, then for example
 `bundle exec fastlane lanes`. The lanes read their keys from `PLAY_JSON_KEY_PATH`, `ASC_KEY_ID`,
