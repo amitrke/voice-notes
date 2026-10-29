@@ -80,6 +80,12 @@ clinical work before). Output is an AI-generated draft and must be reviewed by a
 - API keys are stored with `flutter_secure_storage` (Android Keystore / iOS Keychain).
 - Notes live in a local SQLite database; audio is kept in the app's documents folder.
 - Audio is uploaded only to the provider you selected.
+- Backups: Android's own backup takes only the notes database and settings
+  (`res/xml/backup_rules.xml`, `data_extraction_rules.xml`), not recordings,
+  models or keys, so it stays under the 25 MB limit. On iOS the models folder
+  is excluded from iCloud backup. The voiceprint is kept in secure storage,
+  this device only. Settings > "Back up to a file" exports notes, tags,
+  dictionary and templates as JSON; "Restore from a file" merges them in.
 
 ## Run
 

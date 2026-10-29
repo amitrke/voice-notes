@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/app_state.dart';
@@ -127,6 +131,47 @@ enum SetupFix { keys, provider, writtenBy }
 
 void _open(BuildContext context, Widget page) =>
     Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+
+/// Writes a backup file and opens the share sheet to save it.
+Future<void> _backUp(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final dir = await getTemporaryDirectory();
+    final day = DateTime.now().toIso8601String().substring(0, 10);
+    final file = File('${dir.path}/voice-notes-backup-$day.json');
+    await file.writeAsString(jsonEncode(await state.backup()));
+    await SharePlus.instance.share(ShareParams(
+        files: [XFile(file.path, mimeType: 'application/json')],
+        subject: 'Voice Notes backup $day'));
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Could not back up: $e')));
+  }
+}
+
+/// Picks a backup file and adds its notes to this phone.
+Future<void> _restore(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final picked = await FilePicker.pickFile(type: FileType.any);
+  final path = picked?.path;
+  if (path == null) return;
+  try {
+    final data = jsonDecode(await File(path).readAsString());
+    if (data is! Map) throw const FormatException();
+    final added = await state.restore(Map<String, Object?>.from(data));
+    messenger.showSnackBar(SnackBar(
+        content: Text(added == 0
+            ? 'Restored. Every note in the backup was already here.'
+            : 'Restored $added ${added == 1 ? 'note' : 'notes'}. '
+                'Recordings are not in backups; the text is.')));
+  } on FormatException catch (e) {
+    messenger.showSnackBar(SnackBar(
+        content: Text(e.message.isNotEmpty
+            ? e.message
+            : 'This is not a Voice Notes backup.')));
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Could not restore: $e')));
+  }
+}
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -292,10 +337,32 @@ class SettingsPage extends StatelessWidget {
               ],
             ),
           ),
-          const _Header('Accounts'),
+          const _Header('Accounts and backup'),
           Card(
-            child: _row(context, Icons.key_outlined, 'API keys', keysStatus(s),
-                const _ApiKeysPage()),
+            child: Column(
+              children: [
+                _row(context, Icons.key_outlined, 'API keys', keysStatus(s),
+                    const _ApiKeysPage()),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.backup_outlined),
+                  title: const Text('Back up to a file'),
+                  subtitle: const Text(
+                      'Your notes, tags, dictionary and templates, to save in '
+                      'Google Drive, iCloud Drive or anywhere else. Not the '
+                      'recordings or API keys.'),
+                  onTap: () => _backUp(context, state),
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.settings_backup_restore),
+                  title: const Text('Restore from a file'),
+                  subtitle: const Text(
+                      'Adds the notes from a backup to the ones on this phone.'),
+                  onTap: () => _restore(context, state),
+                ),
+              ],
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 24, 4, 0),
@@ -311,7 +378,9 @@ class SettingsPage extends StatelessWidget {
                     'Your API keys are stored in this device\'s secure storage and '
                     'are only sent to the provider you choose. Audio is uploaded to '
                     'that provider for transcription; nothing goes to any other server. '
-                    'With "On this device", audio never leaves your phone.',
+                    'With "On this device", audio never leaves your phone. Your '
+                    'phone\'s own backup to your Google or Apple account includes '
+                    'your notes; your voiceprint is never backed up.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                         height: 1.5),

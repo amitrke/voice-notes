@@ -8,6 +8,7 @@ import '../providers/ai_provider.dart';
 import '../providers/voice_match.dart';
 import '../services/audio_converter.dart';
 import '../ui/format.dart';
+import 'dictionary.dart';
 import 'find_replace.dart';
 import 'notes_db.dart';
 import 'settings_store.dart';
@@ -124,6 +125,44 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Everything needed to bring the notes to another phone: every note's
+  /// text and what was made from it, folders and tags, and the user's own
+  /// dictionary and templates. Not the recordings, offline models, API keys
+  /// or voiceprint.
+  Future<Map<String, Object?>> backup() async => {
+        'format': backupFormat,
+        'made': DateTime.now().toIso8601String(),
+        'notes': await db.export(),
+        'dictionary': settings.dictionary.toLines(),
+        'templates': [for (final t in settings.customTemplates) t.toJson()],
+      };
+
+  /// Adds what [b] (from [backup]) holds to this phone, keeping everything
+  /// already here. Returns how many notes were added.
+  Future<int> restore(Map<String, Object?> b) async {
+    if (b['format'] != backupFormat) {
+      throw const FormatException('This is not a Voice Notes backup.');
+    }
+    final added =
+        await db.import(Map<String, Object?>.from(b['notes'] as Map));
+    final words = [for (final w in (b['dictionary'] as List?) ?? []) '$w'];
+    if (words.isNotEmpty) {
+      await settings.setDictionary(Dictionary.fromLines(
+          {...settings.dictionary.toLines(), ...words}.toList()));
+    }
+    for (final j in (b['templates'] as List?) ?? []) {
+      final t = NoteTemplate.fromJson(Map<String, dynamic>.from(j as Map));
+      if (t.id.isNotEmpty && settings.template(t.id) == null) {
+        await settings.saveTemplate(t);
+      }
+    }
+    _notes = await db.all();
+    _folders = await db.folders();
+    _tags = await db.tags();
+    notifyListeners();
+    return added;
+  }
+
   Future<void> init() async {
     _notes = await db.all();
     _folders = await db.folders();
@@ -136,6 +175,20 @@ class AppState extends ChangeNotifier {
         segs.add(s.status == NoteStatus.processing
             ? await db.saveSegment(s.copyWith(
                 status: NoteStatus.failed, error: 'Interrupted. Tap retry.'))
+            : s);
+      }
+      await _save(n.withSegments(segs));
+    }
+    // Notes restored onto a new phone by its own backup come without their
+    // recordings; keep the text, as if the audio had been deleted.
+    for (final n in _notes.toList()) {
+      if (!n.segments.any((s) => s.hasAudio && !File(s.audioPath).existsSync())) {
+        continue;
+      }
+      final segs = <Segment>[];
+      for (final s in n.segments) {
+        segs.add(s.hasAudio && !File(s.audioPath).existsSync()
+            ? await db.saveSegment(s.copyWith(audioPath: ''))
             : s);
       }
       await _save(n.withSegments(segs));
@@ -865,6 +918,9 @@ class AppState extends ChangeNotifier {
     return e.toString();
   }
 }
+
+/// Marks a file made by [AppState.backup].
+const backupFormat = 'voice-notes-backup';
 
 /// How often live notes are updated while recording.
 const liveNotesEvery = Duration(minutes: 3);

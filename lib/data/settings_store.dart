@@ -130,7 +130,16 @@ class SettingsStore {
           if (wasClinical) clinicalTemplateId,
         };
     customTemplates = _customFrom(_prefs.getString('customTemplates'));
-    voiceprint = _voiceprintFrom(_prefs.getString('voiceprint'));
+    // Kept with the API keys, which are never backed up. An early build kept
+    // it in preferences; move it over.
+    final oldPrint = _prefs.getString('voiceprint');
+    if (oldPrint != null) {
+      await _secure.write(
+          key: 'voiceprint', value: oldPrint, iOptions: _thisPhoneOnly);
+      await _prefs.remove('voiceprint');
+    }
+    voiceprint = _voiceprintFrom(
+        await _secure.read(key: 'voiceprint', iOptions: _thisPhoneOnly));
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -246,12 +255,18 @@ class SettingsStore {
     await _saveCustom();
   }
 
+  /// On iPhone, keychain items normally move to a new phone with an
+  /// encrypted backup; the voiceprint stays on this one.
+  static const _thisPhoneOnly =
+      IOSOptions(accessibility: KeychainAccessibility.unlocked_this_device);
+
   Future<void> setVoiceprint(List<double>? v) async {
     voiceprint = v;
     if (v == null) {
-      await _prefs.remove('voiceprint');
+      await _secure.delete(key: 'voiceprint', iOptions: _thisPhoneOnly);
     } else {
-      await _prefs.setString('voiceprint', jsonEncode(v));
+      await _secure.write(
+          key: 'voiceprint', value: jsonEncode(v), iOptions: _thisPhoneOnly);
     }
   }
 

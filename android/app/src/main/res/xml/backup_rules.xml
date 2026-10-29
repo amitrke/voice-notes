@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older. Backs up the notes and settings only: recordings
+     and offline models are too big for the 25 MB backup limit (and an app
+     over it is not backed up at all), and the API keys are encrypted with a
+     key that stays on this phone. -->
+<full-backup-content>
+    <include domain="database" path="voice_notes.db"/>
+    <include domain="sharedpref" path="FlutterSharedPreferences.xml"/>
+</full-backup-content>
