@@ -106,8 +106,7 @@ Open Settings, pick a provider, paste its API key, then tap Record.
 
 ## Known gaps
 
-- Verified so far: unit tests with mocked HTTP, `flutter analyze`, and an Android debug build. It has
-  not been run against the real provider APIs or on a device or emulator.
+- Tested by hand on real Android and iOS devices with real provider API keys, as well as unit tests with
+  mocked HTTP and `flutter analyze` in CI. Both stores get builds from CI (see docs/RELEASING.md).
 - Sarvam batch job upload/download response shapes are only partly documented; the parser is
   deliberately tolerant and covered by tests against assumed shapes.
-- iOS is configured (microphone permission) but has not been built.
