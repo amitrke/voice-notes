@@ -1,12 +1,13 @@
-# Releasing to testers
+# Releasing
 
 `.github/workflows/release.yml` builds and ships test builds to Google Play internal testing and TestFlight.
+`.github/workflows/promote.yml` sends a tested build to production on both stores (see "To release").
 It is adapted from the workflow in `amitrke/relay-player`, which has shipped both stores the same way.
 
 | Trigger | Result |
 |---|---|
 | push to `develop` | a test build, named `pubspec version (build number)` |
-| push of tag `v1.0.0` | a release build; the tag must match `pubspec.yaml`'s version |
+| push of tag `v1.0.0` | a test build of that version; the tag must match `pubspec.yaml`'s version. Releases no longer need this (see "To release") |
 | manual run | same, with a choice of store and Play status |
 
 `main` releases nothing on its own. The build number is `github.run_number + 100` on both stores. The offset
@@ -21,8 +22,51 @@ leaves room for the first bundle, which was uploaded to Play by hand with versio
 
 ### To release
 
-Merge `develop` into `main`, tag that commit with the version in its pubspec, push the tag, then bump
-`pubspec.yaml` on `develop`.
+Production gets the build testers already have; nothing is rebuilt.
+
+1. Note the build number testers approved: the number in brackets in TestFlight and Play Console, e.g. `145`
+   in `1.0.1 (145)`. It is the same on both stores.
+2. Update the release notes: `fastlane/metadata/android/en-US/changelogs/default.txt` (500 characters at most)
+   and `fastlane/metadata/ios/en-US/release_notes.txt`. Change any listing text that is out of date too.
+3. Merge `develop` into `main`.
+4. Run **Promote to production** from `main` with action `release` and that build number, then approve it in
+   the `production` environment. It:
+   - moves the build from Play internal testing to production, at the `rollout` percentage (100 is everyone),
+     and uploads the Play listing and release notes;
+   - sends the TestFlight build to App Review with the App Store listing and release notes, set to go live
+     automatically once Apple approves it;
+   - tags the commit `vX.Y.Z` once every store it covered has succeeded.
+5. Bump `pubspec.yaml` on `develop`.
+
+Do not push the tag yourself. A pushed tag makes `release.yml` upload a new test build, which replaces the
+tested one on Play's internal track, and the promotion then cannot find it. The workflow's own tag does not start
+`release.yml`.
+
+To widen a staged Play rollout, run the workflow again (`release`, same build, `android`) with a higher
+`rollout`. If one store fails, fix it and run again for that store only: the tag waits until both have
+succeeded, and a re-run accepts its own tag.
+
+### Store listings
+
+The listing text for both stores lives in `fastlane/metadata`, one file per field, with `android/` (Play, "Voice
+Notes") and `ios/` (App Store, "Basic Voice Notes"). Screenshots and images are not managed there yet. Edit
+the files in a pull request like any other change.
+
+- `release` uploads the listings with each release.
+- `listing` uploads them alone. On Play they go live once Google accepts them. On the App Store most fields can
+  change only on a version being prepared, so `listing` creates or updates the version in pubspec without
+  submitting it; promotional text, description, URLs and release notes can also change on the live version.
+- `check` downloads the live listings and prints how they differ from the repository (in the run's summary). It
+  changes nothing and can run from any branch. Run it before the first `release` or `listing`, and whenever
+  someone may have edited a listing in a console, since an upload overwrites the console's text.
+
+App Review notes are in `fastlane/metadata/ios/review_information/notes.txt`. Contact details are left out on
+purpose, so App Store Connect keeps the ones already there. Each upload removes the App Review attachment unless
+there is a file at `fastlane/review_attachment.mp4`, so the notes must not promise one that is not in the repo.
+
+To run a lane on your own machine (Ruby and Bundler needed): `bundle install`, then for example
+`bundle exec fastlane lanes`. The lanes read their keys from `PLAY_JSON_KEY_PATH`, `ASC_KEY_ID`,
+`ASC_ISSUER_ID` and `ASC_KEY_PATH`.
 
 ### Choosing the stores
 
@@ -32,6 +76,7 @@ with its `platforms` input. Unset means on.
 
 ### Other workflows
 
+- **Promote to production** (manual): see "To release" and "Store listings" above.
 - **Build** (manual): analyse, test and make sideloadable APKs. Needs no secrets.
 - **Publish site to GitHub Pages**: publishes `site/` (privacy policy and support page) when it changes on `main`.
 
@@ -78,6 +123,28 @@ rm key.json
 
 Revoke one repo's key with `gcloud iam service-accounts keys list` then `keys delete <KEY_ID>` (the key ID is in the
 JSON's `private_key_id`). Keys must not be committed; delete the downloaded file as shown.
+
+### Production: the environment and its Play key
+
+`promote.yml` runs every store job in a GitHub environment named `production`. Create it under Settings →
+Environments, add yourself as a required reviewer, and limit it to the `main` branch, so nothing reaches
+production without your approval.
+
+The test service account above cannot publish to production, and it should stay that way. Production uses a
+second service account in the same Cloud project, whose key is only in the `production` environment:
+
+```bash
+gcloud iam service-accounts create play-production   --display-name "Play production releases" --project subnext-play-release
+gcloud iam service-accounts keys create key.json   --iam-account=play-production@subnext-play-release.iam.gserviceaccount.com   --project subnext-play-release
+gh secret set PLAY_PRODUCTION_SERVICE_ACCOUNT_JSON --env production -R amitrke/voice-notes < key.json
+rm key.json
+```
+
+In Play Console, Users and permissions, invite `play-production@subnext-play-release.iam.gserviceaccount.com`
+for this app only, with "Release to production, exclude devices, and use Play App Signing", "Release apps to
+testing tracks" (promotion reads the internal track) and "Manage store presence" (the listing).
+
+The App Store side reuses `APP_STORE_CONNECT_API_KEY_P8`: its Admin role can already submit for review.
 
 ### Android: the first bundle goes up by hand
 

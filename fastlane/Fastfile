@@ -1,0 +1,116 @@
+# Production releases and store listings. Test builds do not use fastlane: they
+# go out through .github/workflows/release.yml. These lanes are run by
+# .github/workflows/promote.yml; see docs/RELEASING.md.
+#
+# Promotion never builds anything. It sends the build testers already have
+# (the same build number on both stores) to production, so what ships is what
+# was tested.
+
+opt_out_usage
+
+# Lane code runs inside fastlane/, actions run from the repository root.
+PUBSPEC = File.expand_path("../pubspec.yaml", __dir__)
+PLAY_METADATA = "fastlane/metadata/android"
+IOS_METADATA = "fastlane/metadata/ios"
+# deliver removes App Review attachments it is not given, so a recording for
+# reviewers has to live here to survive a release.
+REVIEW_ATTACHMENT = "fastlane/review_attachment.mp4"
+
+def version_name
+  name = File.read(PUBSPEC)[/^version:\s*([^+\s]+)/, 1]
+  UI.user_error!("pubspec.yaml's version '#{name}' is not of the form 1.2.3") unless name.to_s.match?(/\A\d+\.\d+\.\d+\z/)
+  name
+end
+
+def build_number(options)
+  build = options[:build].to_s
+  UI.user_error!("Pass build:<number>, the build number testers have (TestFlight and Play show it in brackets)") unless build.match?(/\A\d+\z/)
+  build
+end
+
+# Shared by the iOS lanes.
+def deliver_options
+  options = {
+    platform: "ios",
+    app_version: version_name,
+    metadata_path: IOS_METADATA,
+    skip_binary_upload: true,
+    skip_screenshots: true,
+    # No HTML preview to confirm: this runs unattended.
+    force: true
+  }
+  options[:app_review_attachment_file] = REVIEW_ATTACHMENT if File.exist?(File.expand_path("../#{REVIEW_ATTACHMENT}", __dir__))
+  options
+end
+
+platform :android do
+  desc "Promote a build from internal testing to production, with the listing and release notes"
+  desc "Options: build:<number> (required), rollout:<percent> (default 100)"
+  lane :promote do |options|
+    rollout = (options[:rollout] || 100).to_f
+    UI.user_error!("rollout must be a percentage above 0 and at most 100") unless rollout > 0 && rollout <= 100
+
+    upload_to_play_store(
+      track: "internal",
+      track_promote_to: "production",
+      version_code: build_number(options).to_i,
+      rollout: (rollout / 100).to_s,
+      metadata_path: PLAY_METADATA,
+      skip_upload_apk: true,
+      skip_upload_aab: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+
+  desc "Upload the store listing text only. It goes live once Google accepts it"
+  lane :listing do
+    upload_to_play_store(
+      metadata_path: PLAY_METADATA,
+      skip_upload_apk: true,
+      skip_upload_aab: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+
+  desc "Download the live listing into path:<dir>, to compare with the repository"
+  lane :fetch_listing do |options|
+    download_from_play_store(metadata_path: options[:path] || UI.user_error!("Pass path:<dir>"))
+  end
+end
+
+platform :ios do
+  before_all do
+    app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_PATH")
+    )
+  end
+
+  desc "Submit a TestFlight build for App Review with the listing and release notes"
+  desc "It goes live automatically once Apple approves it. Options: build:<number> (required)"
+  lane :promote do |options|
+    deliver(
+      deliver_options.merge(
+        build_number: build_number(options),
+        submit_for_review: true,
+        automatic_release: true,
+        # Apple's review is the check that matters, and precheck cannot read
+        # in-app purchases with an API key anyway.
+        run_precheck_before_submit: false,
+        submission_information: {
+          add_id_info_uses_idfa: false,
+          content_rights_contains_third_party_content: false
+        }
+      )
+    )
+  end
+
+  desc "Upload the listing to the version being prepared (pubspec's version), without submitting it"
+  lane :listing do
+    deliver(deliver_options)
+  end
+end

@@ -1,5 +1,8 @@
 # Store listing drafts
 
+The live listing text is now kept in `fastlane/metadata` (see docs/RELEASING.md), which wins where the two
+differ. This page keeps the reasoning, the App Review background and the settings submitted for 1.0.
+
 Character limits are noted per field and every field is within its limit.
 
 ---
