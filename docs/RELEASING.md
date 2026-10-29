@@ -57,8 +57,10 @@ the files in a pull request like any other change.
   change only on a version being prepared, so `listing` creates or updates the version in pubspec without
   submitting it; promotional text, description, URLs and release notes can also change on the live version.
 - `check` downloads the live listings and prints how they differ from the repository (in the run's summary). It
-  changes nothing and can run from any branch. Run it before the first `release` or `listing`, and whenever
-  someone may have edited a listing in a console, since an upload overwrites the console's text.
+  changes nothing, but it still needs the store keys, so like the other actions it runs from `main` only and
+  waits for approval. It compares the listings on `main`, so merge listing edits there before checking them.
+  Run it before the first `release` or `listing`, and whenever someone may have edited a listing in a console,
+  since an upload overwrites the console's text.
 
 App Review notes are in `fastlane/metadata/ios/review_information/notes.txt`. Contact details are left out on
 purpose, so App Store Connect keeps the ones already there. Each upload removes the App Review attachment unless
@@ -127,8 +129,9 @@ JSON's `private_key_id`). Keys must not be committed; delete the downloaded file
 ### Production: the environment and its Play key
 
 `promote.yml` runs every store job in a GitHub environment named `production`. Create it under Settings →
-Environments, add yourself as a required reviewer, and limit it to the `main` branch, so nothing reaches
-production without your approval.
+Environments, add yourself as a required reviewer (leave "Prevent self-review" off, since you start the runs
+too), and limit it to the `main` branch, so nothing reaches production without your approval. That limit is why
+every action, `check` included, runs from `main` only. (Done for this repo on 29 October 2026.)
 
 The test service account above cannot publish to production, and it should stay that way. Production uses a
 second service account in the same Cloud project, whose key is only in the `production` environment:
