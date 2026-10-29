@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +12,7 @@ import '../providers/sarvam_provider.dart';
 import '../services/audio_converter.dart';
 import '../services/model_store.dart';
 import 'dictionary.dart';
+import 'templates.dart';
 import 'text_scale.dart';
 
 class ModelDefaults {
@@ -48,14 +51,55 @@ class SettingsStore {
   ProviderId? enrichment;
   bool translate = true;
   bool autoSummary = true;
-  bool clinical = false;
   double textScale = defaultTextScale;
+
+  /// Ids of the built-in templates offered under "Turn into…". The user's
+  /// own templates are always offered.
+  Set<String> templatesOn = {};
+
+  /// Templates the user wrote.
+  List<NoteTemplate> customTemplates = [];
+
+  /// Notes can be turned into a clinical note.
+  bool get clinical => templatesOn.contains(clinicalTemplateId);
+
+  List<NoteTemplate> get allTemplates =>
+      [...builtInTemplates, ...customTemplates];
+
+  /// The templates offered under "Turn into…".
+  List<NoteTemplate> get enabledTemplates => allTemplates
+      .where((t) => !t.builtIn || templatesOn.contains(t.id))
+      .toList();
+
+  NoteTemplate? template(String id) =>
+      allTemplates.where((t) => t.id == id).firstOrNull;
+
+  /// The template last picked for live notes while recording, if it is
+  /// still offered.
+  NoteTemplate? get liveNotesTemplate {
+    final id = _prefs.getString('liveNotes');
+    return enabledTemplates
+        .where((t) => t.id == id && !t.isClinical)
+        .firstOrNull;
+  }
+
+  Future<void> setLiveNotes(String? id) async {
+    if (id == null) {
+      await _prefs.remove('liveNotes');
+    } else {
+      await _prefs.setString('liveNotes', id);
+    }
+  }
 
   /// Remove a recording's audio file once its text has been saved.
   bool deleteAudioAfter = false;
 
   /// Label who is speaking, where the provider can tell voices apart.
   bool identifySpeakers = false;
+
+  /// The owner's voiceprint, so their lines can be labelled "You"; null
+  /// until they record a sample. Kept on the phone only.
+  List<double>? voiceprint;
 
   /// Names and terms the user wants spelled a certain way.
   Dictionary dictionary = Dictionary();
@@ -73,7 +117,29 @@ class SettingsStore {
     enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
-    clinical = _prefs.getBool('clinical') ?? false;
+    // Before templates, clinical notes came from a use case setting, and
+    // before that from a plain on/off switch.
+    final useCase = _prefs.getString('useCase');
+    final wasClinical = useCase == null
+        ? (_prefs.getBool('clinical') ?? false)
+        : useCase == 'clinical';
+    templatesOn = _prefs.getStringList('templatesOn')?.toSet() ??
+        {
+          for (final t in builtInTemplates)
+            if (!t.isClinical) t.id,
+          if (wasClinical) clinicalTemplateId,
+        };
+    customTemplates = _customFrom(_prefs.getString('customTemplates'));
+    // Kept with the API keys, which are never backed up. An early build kept
+    // it in preferences; move it over.
+    final oldPrint = _prefs.getString('voiceprint');
+    if (oldPrint != null) {
+      await _secure.write(
+          key: 'voiceprint', value: oldPrint, iOptions: _thisPhoneOnly);
+      await _prefs.remove('voiceprint');
+    }
+    voiceprint = _voiceprintFrom(
+        await _secure.read(key: 'voiceprint', iOptions: _thisPhoneOnly));
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -166,9 +232,66 @@ class SettingsStore {
     await _prefs.setDouble('textScale', textScale);
   }
 
-  Future<void> setClinical(bool v) async {
-    clinical = v;
-    await _prefs.setBool('clinical', v);
+  Future<void> setTemplateOn(String id, bool on) async {
+    templatesOn = {...templatesOn}..remove(id);
+    if (on) templatesOn.add(id);
+    await _prefs.setStringList('templatesOn', templatesOn.toList());
+  }
+
+  /// Adds [t], or replaces the user's template with the same id.
+  Future<void> saveTemplate(NoteTemplate t) async {
+    final i = customTemplates.indexWhere((e) => e.id == t.id);
+    customTemplates = [...customTemplates];
+    if (i < 0) {
+      customTemplates.add(t);
+    } else {
+      customTemplates[i] = t;
+    }
+    await _saveCustom();
+  }
+
+  Future<void> deleteTemplate(String id) async {
+    customTemplates = customTemplates.where((t) => t.id != id).toList();
+    await _saveCustom();
+  }
+
+  /// On iPhone, keychain items normally move to a new phone with an
+  /// encrypted backup; the voiceprint stays on this one.
+  static const _thisPhoneOnly =
+      IOSOptions(accessibility: KeychainAccessibility.unlocked_this_device);
+
+  Future<void> setVoiceprint(List<double>? v) async {
+    voiceprint = v;
+    if (v == null) {
+      await _secure.delete(key: 'voiceprint', iOptions: _thisPhoneOnly);
+    } else {
+      await _secure.write(
+          key: 'voiceprint', value: jsonEncode(v), iOptions: _thisPhoneOnly);
+    }
+  }
+
+  static List<double>? _voiceprintFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return [for (final x in jsonDecode(raw) as List) (x as num).toDouble()];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveCustom() => _prefs.setString('customTemplates',
+      jsonEncode([for (final t in customTemplates) t.toJson()]));
+
+  static List<NoteTemplate> _customFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return [
+        for (final j in jsonDecode(raw) as List)
+          NoteTemplate.fromJson(j as Map<String, dynamic>),
+      ].where((t) => t.id.isNotEmpty && t.name.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<void> setAutoSummary(bool v) async {

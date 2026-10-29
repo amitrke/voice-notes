@@ -59,23 +59,33 @@ SRT export.
 - **Share to the app** (Android): audio and video shared from other apps become notes
   (`SharedAudio.kt`, `lib/services/share_intake.dart`). iOS has no share extension yet.
 
-### Enrichment (titles, summaries, clinical notes)
+### Enrichment (titles, summaries, templates)
 
-Text work can use a different provider from transcription (Settings > Enrichment). OpenRouter is available
+Text work can use a different provider from transcription (Settings > Written by). OpenRouter is available
 there as a text-only option (default model `openrouter/free`, which picks an available free model). It cannot
 transcribe audio, so it is not offered as the transcription provider.
 
-### Clinical mode
+### Templates
 
-Settings > "I use this for" > Clinical work adds a "Create clinical note" button to each transcript: an
-interpretation, a clinical note in English and the spoken language, and items to verify, with TXT export.
-Output is an AI-generated draft and must be reviewed by a clinician.
+"Turn into…" on a note runs a template: meeting minutes, a to-do list, a recipe, a grammar review, a clinical
+note, or one the user wrote (Settings > Templates). Each is one request to the text provider; the result is
+stored on the note (`outputs` column, `lib/data/templates.dart`) and goes out of date with the summary.
+
+The clinical template keeps its own report and screen: an interpretation, a clinical note in English and the
+spoken language, and items to verify, with TXT export. It is off by default (on for users who had chosen
+clinical work before). Output is an AI-generated draft and must be reviewed by a clinician.
 
 ## Privacy
 
 - API keys are stored with `flutter_secure_storage` (Android Keystore / iOS Keychain).
 - Notes live in a local SQLite database; audio is kept in the app's documents folder.
 - Audio is uploaded only to the provider you selected.
+- Backups: Android's own backup takes only the notes database and settings
+  (`res/xml/backup_rules.xml`, `data_extraction_rules.xml`), not recordings,
+  models or keys, so it stays under the 25 MB limit. On iOS the models folder
+  is excluded from iCloud backup. The voiceprint is kept in secure storage,
+  this device only. Settings > "Back up to a file" exports notes, tags,
+  dictionary and templates as JSON; "Restore from a file" merges them in.
 
 ## Run
 

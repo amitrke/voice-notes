@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import '../data/templates.dart';
 import '../providers/ai_provider.dart';
+import '../providers/voice_match.dart';
 
 enum NoteStatus { processing, done, failed }
 
@@ -137,6 +139,9 @@ class Note {
   final String? error;
   final ClinicalReport? clinical;
 
+  /// What the note was turned into with templates other than clinical.
+  final List<TemplateOutput> outputs;
+
   /// [textHash] of the text the title/summary/clinical note were generated
   /// from; null if they never were.
   final String? enrichedHash;
@@ -168,6 +173,7 @@ class Note {
     this.status = NoteStatus.processing,
     this.error,
     this.clinical,
+    this.outputs = const [],
     this.enrichedHash,
     this.folderId,
     this.speakerNames = const {},
@@ -186,6 +192,7 @@ class Note {
   String speakerLabel(String id) {
     final named = speakerNames[id]?.trim() ?? '';
     if (named.isNotEmpty) return named;
+    if (id == youSpeakerId) return 'You';
     final number = RegExp(r'\d+').firstMatch(id)?.group(0);
     final index = number != null
         ? int.parse(number)
@@ -201,7 +208,12 @@ class Note {
     return d.isEmpty ? null : d.fold<int>(0, (a, b) => a + b);
   }
 
-  bool get hasEnrichment => summary.isNotEmpty || clinical != null;
+  bool get hasEnrichment =>
+      summary.isNotEmpty || clinical != null || outputs.isNotEmpty;
+
+  /// What [templateId] made from this note, if anything.
+  TemplateOutput? output(String templateId) =>
+      outputs.where((o) => o.templateId == templateId).firstOrNull;
 
   /// True when the text changed after the summary/clinical note were made.
   bool get isStale =>
@@ -248,6 +260,7 @@ class Note {
     String? summary,
     String? provider,
     ClinicalReport? clinical,
+    List<TemplateOutput>? outputs,
     String? enrichedHash,
     int? folderId,
     bool clearFolder = false,
@@ -268,6 +281,7 @@ class Note {
         status: status,
         error: error,
         clinical: clinical ?? this.clinical,
+        outputs: outputs ?? this.outputs,
         enrichedHash: enrichedHash ?? this.enrichedHash,
         folderId: clearFolder ? null : (folderId ?? this.folderId),
         speakerNames: speakerNames ?? this.speakerNames,
@@ -291,6 +305,7 @@ class Note {
       status: c.status,
       error: c.error,
       clinical: clinical,
+      outputs: outputs,
       enrichedHash: enrichedHash,
       folderId: folderId,
       speakerNames: speakerNames,
@@ -314,6 +329,9 @@ class Note {
         'status': status.name,
         'error': error,
         'clinical': clinical == null ? null : jsonEncode(clinical!.toJson()),
+        'outputs': outputs.isEmpty
+            ? null
+            : jsonEncode([for (final o in outputs) o.toJson()]),
         'enriched_hash': enrichedHash,
         'folder_id': folderId,
         'speakers': speakerNames.isEmpty ? null : jsonEncode(speakerNames),
@@ -338,6 +356,7 @@ class Note {
         ),
         error: m['error'] as String?,
         clinical: _clinicalFrom(m['clinical'] as String?),
+        outputs: TemplateOutput.listFrom(m['outputs'] as String?),
         enrichedHash: m['enriched_hash'] as String?,
         folderId: m['folder_id'] as int?,
         speakerNames: _namesFrom(m['speakers'] as String?),

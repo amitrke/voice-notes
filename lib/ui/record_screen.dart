@@ -1,17 +1,28 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../data/app_state.dart';
+import '../data/templates.dart';
+import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import '../services/background_recording.dart';
 import '../services/recorder_service.dart';
 import 'format.dart';
+import 'templates_ui.dart';
 import 'theme.dart';
 
-/// Full-screen recorder that records until the user taps stop. Pops with a
-/// [RecordingResult], or null when cancelled.
+/// Full-screen recorder that records until the user taps stop. The recording
+/// is saved in parts (see [shouldSplit]), each transcribed while recording
+/// goes on, so an hour-long meeting works like a short note. Adds them to
+/// note [noteId], or to a new note, and pops with that note's id, or null
+/// when cancelled.
 class RecordScreen extends StatefulWidget {
   final RecordingFormat format;
-  const RecordScreen({super.key, required this.format});
+  final int? noteId;
+  const RecordScreen({super.key, required this.format, this.noteId});
 
   @override
   State<RecordScreen> createState() => _RecordScreenState();
@@ -22,32 +33,57 @@ const _meterBars = 40;
 
 class _RecordScreenState extends State<RecordScreen> {
   final _recorder = RecorderService();
+  late final AppState _state = context.read<AppState>();
   Timer? _ticker;
   StreamSubscription<double>? _levelSub;
   final _levels = List<double>.filled(_meterBars, 0, growable: true);
   final _clock = Stopwatch();
+  final _quiet = Stopwatch();
   String? _error;
   bool _recording = false;
+  bool _splitting = false;
+
+  /// The note the parts go to; set once the first part is saved.
+  late int? _noteId = widget.noteId;
+
+  /// Parts added to an existing note, removed again on cancel.
+  final _added = <int>[];
+  int _parts = 0;
+
+  /// The template whose notes build up while recording, if any.
+  NoteTemplate? _liveNotes;
 
   @override
   void initState() {
     super.initState();
+    _liveNotes = _state.settings.liveNotesTemplate;
+    if (widget.noteId != null) {
+      _state.beginLive(widget.noteId!, liveNotes: _liveNotes);
+    }
     _begin();
   }
 
   Future<void> _begin() async {
     try {
       await _recorder.start(widget.format);
+      await keepRecordingInBackground(true);
       _clock.start();
       _levelSub = _recorder.levels().listen((v) {
         _levels
           ..removeAt(0)
           ..add(v);
+        if (v < quietLevel) {
+          if (!_quiet.isRunning) _quiet.start();
+        } else {
+          _quiet
+            ..stop()
+            ..reset();
+        }
       });
-      _ticker = Timer.periodic(
-        const Duration(milliseconds: 100),
-        (_) => setState(() {}),
-      );
+      _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+        _maybeSplit();
+        setState(() {});
+      });
       setState(() => _recording = true);
     } on MicPermissionDenied {
       setState(
@@ -58,11 +94,108 @@ class _RecordScreenState extends State<RecordScreen> {
     }
   }
 
+  void _maybeSplit() {
+    final started = _recorder.partStartedAt;
+    if (_splitting || started == null) return;
+    if (!shouldSplit(DateTime.now().difference(started), _quiet.elapsed)) {
+      return;
+    }
+    _splitting = true;
+    _recorder.split().then((part) async {
+      if (part != null) await _addPart(part);
+    }).whenComplete(() => _splitting = false);
+  }
+
+  /// Saves a finished part; it is transcribed in the background.
+  Future<void> _addPart(RecordingResult part) async {
+    // A sliver left over at the end is not worth a request.
+    if (_parts > 0 && part.durationMs < 1000) {
+      try {
+        await File(part.path).delete();
+      } catch (_) {}
+      return;
+    }
+    _parts++;
+    if (_noteId == null) {
+      final n = await _state.addAudio(part.path,
+          durationMs: part.durationMs, live: true, liveNotes: _liveNotes);
+      _noteId = n.id;
+    } else {
+      final seg = await _state.addSegment(_noteId!, part.path,
+          durationMs: part.durationMs);
+      if (seg != null && widget.noteId != null) _added.add(seg.id!);
+    }
+  }
+
   Future<void> _stop() async {
     _ticker?.cancel();
     await _levelSub?.cancel();
-    final result = await _recorder.stop();
-    if (mounted) Navigator.pop(context, result);
+    while (_splitting) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    final part = await _recorder.stop();
+    await keepRecordingInBackground(false);
+    if (part != null) await _addPart(part);
+    final id = _noteId;
+    // Waits for the last parts and then writes the summary; no need to hold
+    // the screen open for it.
+    if (id != null) unawaited(_state.endLive(id));
+    if (mounted) Navigator.pop(context, id);
+  }
+
+  Future<void> _pickLiveNotes() async {
+    final picked = await showModalBottomSheet<_LiveChoice>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Text('Notes while you record',
+                    style: Theme.of(sheet).textTheme.titleMedium),
+              ),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                leading: const Icon(Icons.notes_outlined),
+                title: const Text('Off'),
+                subtitle: const Text('Just the transcript, then a summary'),
+                trailing: _liveNotes == null ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(sheet, const _LiveChoice(null)),
+              ),
+              for (final t in _state.settings.enabledTemplates
+                  .where((t) => !t.isClinical && t.id != speakingTemplateId))
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                  leading: Icon(templateIcon(t.id)),
+                  title: Text(t.name),
+                  subtitle:
+                      Text(t.blurb.isNotEmpty ? t.blurb : 'Your template'),
+                  trailing:
+                      _liveNotes?.id == t.id ? const Icon(Icons.check) : null,
+                  onTap: () => Navigator.pop(sheet, _LiveChoice(t)),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+                child: Text(
+                  'Updated every few minutes, about a dozen requests an hour, '
+                  'then rewritten from the full transcript when you stop.',
+                  style: Theme.of(sheet).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null) return;
+    setState(() => _liveNotes = picked.template);
+    await _state.settings.setLiveNotes(picked.template?.id);
+    final id = _noteId;
+    if (id != null) _state.live(id)?.liveNotes = picked.template;
   }
 
   /// Recordings shorter than this are discarded without asking.
@@ -94,7 +227,22 @@ class _RecordScreenState extends State<RecordScreen> {
     }
     _ticker?.cancel();
     await _levelSub?.cancel();
+    while (_splitting) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     if (_recording) await _recorder.cancel();
+    await keepRecordingInBackground(false);
+    final id = _noteId;
+    if (id != null) {
+      await _state.endLive(id, discard: true);
+      if (widget.noteId == null) {
+        await _state.delete(id);
+      } else {
+        for (final s in _added) {
+          await _state.deleteSegment(id, s);
+        }
+      }
+    }
     if (mounted) Navigator.pop(context);
   }
 
@@ -103,7 +251,120 @@ class _RecordScreenState extends State<RecordScreen> {
     _ticker?.cancel();
     _levelSub?.cancel();
     _recorder.dispose();
+    keepRecordingInBackground(false);
     super.dispose();
+  }
+
+  /// Parts transcribed so far, the last words heard, and the live notes.
+  List<Widget> _progress(TextTheme text, Color fg, Color muted) {
+    final id = _noteId;
+    final note = id == null ? null : context.watch<AppState>().byId(id);
+    final session = id == null ? null : _state.live(id);
+    final known = session?.knownSegments ?? const <int>{};
+    final mine = note?.segments.where((s) => !known.contains(s.id)).toList() ??
+        const <Segment>[];
+    final done = mine.where((s) => s.status == NoteStatus.done).toList();
+    final failed = mine.where((s) => s.status == NoteStatus.failed).length;
+    final heard = done.isEmpty ? '' : done.last.transcript.trim();
+    final out = _liveNotes == null ? null : note?.output(_liveNotes!.id);
+    final card = BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.07),
+      borderRadius: BorderRadius.circular(12),
+    );
+    final label = text.labelMedium?.copyWith(color: muted);
+    return [
+      if (mine.isNotEmpty)
+        Text(
+          '${done.length} of ${mine.length} '
+          '${mine.length == 1 ? 'part' : 'parts'} transcribed'
+          '${failed > 0 ? ' · $failed failed, kept to retry' : ''}',
+          style: label,
+        ),
+      if (heard.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: card,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Just heard', style: label),
+              const SizedBox(height: 4),
+              Text(
+                heard.length > 160
+                    ? '…${heard.substring(heard.length - 160)}'
+                    : heard,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: text.bodyMedium?.copyWith(color: fg, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: 12),
+      Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _pickLiveNotes,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: card,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _liveNotes == null
+                            ? 'Live notes: off'
+                            : 'Live notes: ${_liveNotes!.name}',
+                        style: label,
+                      ),
+                    ),
+                    Text(
+                      session?.updating == true
+                          ? 'Updating…'
+                          : session?.updatedAt != null
+                              ? 'Updated ${_ago(session!.updatedAt!)}'
+                              : _liveNotes == null
+                                  ? 'Turn on'
+                                  : 'First update in a few minutes',
+                      style: label,
+                    ),
+                  ],
+                ),
+                if (session?.error != null) ...[
+                  const SizedBox(height: 4),
+                  Text(session!.error!,
+                      style: text.bodySmall
+                          ?.copyWith(color: const Color(0xFFFF8A7E))),
+                ],
+                if (out != null)
+                  for (final s in out.sections) ...[
+                    const SizedBox(height: 8),
+                    if (s.heading.isNotEmpty)
+                      Text(s.heading,
+                          style: text.titleSmall?.copyWith(color: fg)),
+                    Text(s.body,
+                        style:
+                            text.bodyMedium?.copyWith(color: fg, height: 1.4)),
+                  ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  static String _ago(DateTime t) {
+    final m = DateTime.now().difference(t).inMinutes;
+    return m < 1 ? 'just now' : '$m min ago';
   }
 
   @override
@@ -192,60 +453,63 @@ class _RecordScreenState extends State<RecordScreen> {
                         ],
                       ),
                       Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              formatDuration(_clock.elapsedMilliseconds),
-                              style: textTheme.displayLarge?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 40),
-                            ExcludeSemantics(
-                              child: SizedBox(
-                                height: 120,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    for (final v in _levels)
-                                      Container(
-                                        width: 4,
-                                        height: 6 + v * 110,
-                                        margin: const EdgeInsets.symmetric(
-                                          horizontal: 2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: fg,
-                                          borderRadius: BorderRadius.circular(
-                                            2,
-                                          ),
-                                        ),
-                                      ),
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 32),
+                              Text(
+                                formatDuration(_clock.elapsedMilliseconds),
+                                style: textTheme.displayLarge?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
                                   ],
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 40),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 40,
+                              const SizedBox(height: 32),
+                              ExcludeSemantics(
+                                child: SizedBox(
+                                  height: 100,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      for (final v in _levels)
+                                        Container(
+                                          width: 4,
+                                          height: 6 + v * 90,
+                                          margin: const EdgeInsets.symmetric(
+                                            horizontal: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: fg,
+                                            borderRadius:
+                                                BorderRadius.circular(2),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                              child: Text(
-                                'Speak in any language.',
+                              const SizedBox(height: 32),
+                              Text(
+                                _clock.elapsed < const Duration(minutes: 1)
+                                    ? 'Speak in any language.'
+                                    : 'Recording other people? Let them know.',
                                 textAlign: TextAlign.center,
                                 style: textTheme.bodyMedium?.copyWith(
                                   color: muted,
                                   height: 1.5,
                                 ),
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 20),
+                              ..._progress(textTheme, fg, muted),
+                              const SizedBox(height: 24),
+                            ],
+                          ),
                         ),
                       ),
+                      const SizedBox(height: 12),
                       Semantics(
                         button: true,
                         label: 'Stop and save',
@@ -289,4 +553,9 @@ class _RecordScreenState extends State<RecordScreen> {
       ),
     );
   }
+}
+
+class _LiveChoice {
+  final NoteTemplate? template;
+  const _LiveChoice(this.template);
 }

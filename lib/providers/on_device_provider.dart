@@ -112,7 +112,7 @@ class OnDeviceProvider implements AiProvider {
 
   static const _noText = ProviderException(
       'On-device transcription has no text model. Choose a text provider '
-      'under Settings > After transcribing.');
+      'under Settings > Written by.');
 }
 
 class _Job {
@@ -286,8 +286,9 @@ List<Piece> padPieces(List<Piece> pieces, int total, {int pad = _rate ~/ 4}) {
   return out;
 }
 
-/// Whisper's language code ("hi", "en", ...) from up to 30 s of speech, or
-/// '' if it could not tell.
+/// Whisper's language code ("hi", "en", ...) from up to 29 s of speech, or
+/// '' if it could not tell. sherpa-onnx takes less than 30 s and cuts the
+/// rest off with a warning.
 String _detectLanguage(_Job job, Int16List pcm, List<Piece> pieces) {
   final lid = sherpa.SpokenLanguageIdentification(
     sherpa.SpokenLanguageIdentificationConfig(
@@ -299,7 +300,7 @@ String _detectLanguage(_Job job, Int16List pcm, List<Piece> pieces) {
   try {
     final sample = <double>[];
     for (final piece in pieces) {
-      final room = 30 * _rate - sample.length;
+      final room = 29 * _rate - sample.length;
       if (room <= 0) break;
       sample.addAll(pcmToFloat(pcm, piece.start, math.min(piece.length, room)));
     }

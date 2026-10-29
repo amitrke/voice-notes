@@ -48,7 +48,7 @@ class NotesDb {
   final Database _db;
   NotesDb._(this._db);
 
-  static const version = 6;
+  static const version = 7;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi.
@@ -77,7 +77,8 @@ class NotesDb {
               enriched_hash TEXT,
               folder_id INTEGER,
               speakers TEXT,
-              tags_edited INTEGER NOT NULL DEFAULT 0
+              tags_edited INTEGER NOT NULL DEFAULT 0,
+              outputs TEXT
             )''');
           await db.execute(_segmentsTable);
           await db.execute(_foldersTable);
@@ -97,6 +98,7 @@ class NotesDb {
                 type: 'INTEGER NOT NULL DEFAULT 0');
             await _addTags(db);
           }
+          if (from < 7) await _addColumn(db, 'notes', 'outputs');
         },
       ),
     );
@@ -249,6 +251,95 @@ class NotesDb {
           await txn.insert('note_tags', {'note_id': noteId, 'tag_id': t});
         }
       });
+
+  /// Every row of every table, for a backup file. Recordings are left out;
+  /// their text is in the rows.
+  Future<Map<String, Object?>> export() async => {
+        'version': version,
+        for (final t in _backedUp) t: await _db.query(t),
+      };
+
+  static const _backedUp = ['notes', 'segments', 'folders', 'tags', 'note_tags'];
+
+  /// Adds the notes in [backup] (from [export], on this phone or another)
+  /// to the ones here. Folders and tags are matched by name; a note already
+  /// here (same time and text) is skipped, so restoring twice adds nothing.
+  /// Recordings are not in a backup, so restored notes have text only.
+  /// Returns how many notes were added.
+  Future<int> import(Map<String, Object?> backup) async {
+    final from = backup['version'];
+    if (from is! int || from > version) {
+      throw const FormatException(
+          'This backup was made by a newer version of Voice Notes. Update '
+          'the app, then restore it.');
+    }
+    List<Map<String, Object?>> rows(String t) => [
+          for (final r in (backup[t] as List?) ?? const [])
+            Map<String, Object?>.from(r as Map),
+        ];
+    return _db.transaction((txn) async {
+      // A backup from an older version may lack newer columns, and never
+      // has unknown ones; keep only the columns this table has.
+      Future<Map<String, Object?>> fit(
+          String table, Map<String, Object?> r) async {
+        final cols = {
+          for (final c in await txn.rawQuery('PRAGMA table_info($table)'))
+            c['name'] as String,
+        };
+        return {
+          for (final e in r.entries)
+            if (cols.contains(e.key) && e.key != 'id') e.key: e.value,
+        };
+      }
+
+      final folders = <int, int>{};
+      for (final f in rows('folders')) {
+        final name = f['name'] as String;
+        final same = await txn.query('folders',
+            where: 'name = ? COLLATE NOCASE', whereArgs: [name], limit: 1);
+        folders[f['id'] as int] = same.isNotEmpty
+            ? same.first['id'] as int
+            : await txn.insert('folders', {'name': name});
+      }
+      final tags = <int, int>{};
+      for (final t in rows('tags')) {
+        final same = await txn.query('tags',
+            where: 'name = ?', whereArgs: [t['name']], limit: 1);
+        tags[t['id'] as int] = same.isNotEmpty
+            ? same.first['id'] as int
+            : await txn.insert('tags', await fit('tags', t));
+      }
+      final notes = <int, int>{};
+      for (final n in rows('notes')) {
+        final dup = await txn.query('notes',
+            columns: ['id'],
+            where: 'created_at = ? AND transcript = ?',
+            whereArgs: [n['created_at'], n['transcript'] ?? ''],
+            limit: 1);
+        if (dup.isNotEmpty) continue;
+        final folder = n['folder_id'];
+        notes[n['id'] as int] = await txn.insert('notes', {
+          ...await fit('notes', n),
+          'audio_path': '',
+          'folder_id': folder is int ? folders[folder] : null,
+        });
+      }
+      for (final s in rows('segments')) {
+        final note = notes[s['note_id']];
+        if (note == null) continue;
+        await txn.insert('segments',
+            {...await fit('segments', s), 'note_id': note, 'audio_path': ''});
+      }
+      for (final l in rows('note_tags')) {
+        final note = notes[l['note_id']];
+        final tag = tags[l['tag_id']];
+        if (note == null || tag == null) continue;
+        await txn.insert('note_tags', {'note_id': note, 'tag_id': tag},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      return notes.length;
+    });
+  }
 
   Future<void> close() => _db.close();
 }
