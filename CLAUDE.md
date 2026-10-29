@@ -29,8 +29,8 @@ CI pins Flutter 3.47.0 (`FLUTTER_VERSION` in the workflows). Change it in all th
 ## Secrets
 
 Never commit `android/key.properties`, `*.jks`, `.p8` files or API keys. The upload keystore lives in
-`C:\Users\amitr\dev\keystores\voice-notes\`. CI gets keys only from GitHub secrets, and only `release.yml` and `promote.yml`
-(whose Play production key is in the `production` environment).
+`C:\Users\amitr\dev\keystores\voice-notes\`. CI gets keys only from GitHub secrets, and only `release.yml` and `promote.yml`.
+The one Play key can release to production for every app on the account, so a leak is serious.
 
 ## Identifiers
 
