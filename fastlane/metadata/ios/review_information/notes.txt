@@ -1,14 +1,14 @@
-Basic Voice Notes is a bring-your-own-key app. There is no account or sign-in, and the developer runs no server. The app sends audio directly from the device to an AI provider that the user chooses (Sarvam, OpenAI or Google Gemini), using the user's own API key, so a key is needed to transcribe.
+Basic Voice Notes has no account or sign-in, and the developer runs no server.
 
-The developer cannot supply a paid test key. The quickest free option is a Google Gemini key, which has a free tier and takes about two minutes to create: https://amitrke.github.io/voice-notes/api-keys/
+The quickest way to test needs no API key and works offline:
+1. Tap the gear icon (top right) to open Settings, then tap Provider under Transcribe.
+2. Choose "On this device", then tap Download next to the Base model (about 160 MB; Wi-Fi recommended).
+3. Go back to Notes, tap Record, say a sentence, then tap stop. (Or tap the import icon and choose an audio file.)
+4. A few seconds later the note shows a transcript, with an English translation if "Translate to English" is on in Settings.
 
-To test:
-1. Open Settings (gear icon, top right) and choose "Gemini" as the provider.
-2. Paste the key into "API key" and tap Save, then return to Notes.
-3. Tap Record, say a sentence, then tap stop. (Or tap the import icon and choose an audio file.)
-4. After a few seconds the note shows a transcript, an English translation and a summary.
+Titles, summaries, templates and online transcription use the user's own API key from Sarvam, OpenAI, Google Gemini or OpenRouter, added under Settings > API keys. The app sends audio or text directly from the device to that provider. A free Google Gemini key takes about two minutes to create: https://amitrke.github.io/voice-notes/api-keys/
 
-Without a key the app still opens normally. A banner on the notes screen explains that a key is needed.
+Without a key, the app still opens normally, and a banner explains what is needed.
 
 Permissions: the app asks only for microphone access, when recording. It also has an optional "Clinical work" setting, off by default, that drafts a clinical note from a transcript. The app is not a medical device.
 

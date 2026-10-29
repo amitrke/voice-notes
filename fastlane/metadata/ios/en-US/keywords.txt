@@ -1,1 +1,1 @@
-voice,notes,transcribe,speech,text,translate,Hindi,dictation,recorder,audio,summary,multilingual
+voice,notes,transcribe,speech,text,offline,translate,Hindi,dictation,recorder,audio,summary,minutes
