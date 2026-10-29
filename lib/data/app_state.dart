@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import '../providers/voice_match.dart';
+import '../services/audio_converter.dart';
 import '../ui/format.dart';
 import 'find_replace.dart';
 import 'notes_db.dart';
@@ -379,12 +381,20 @@ class AppState extends ChangeNotifier {
 
   /// Stores a note for [audioPath] right away (so nothing is lost if the
   /// network fails) and transcribes it in the background.
-  Future<Note> addAudio(String audioPath, {int? durationMs}) async {
+  /// With [live], the recording is still going: see [beginLive].
+  Future<Note> addAudio(String audioPath,
+      {int? durationMs, bool live = false, NoteTemplate? liveNotes}) async {
     final note = await db.insert(Note(
       segments: [Segment(audioPath: audioPath, durationMs: durationMs)],
       provider: settings.active.name,
       createdAt: DateTime.now(),
     ));
+    // Registered before the note is in the list, so its first recording
+    // counts as part of the live one.
+    if (live) {
+      _live[note.id!] = LiveSession(
+          liveNotes: liveNotes, summarise: true, knownSegments: const {});
+    }
     _notes.insert(0, note);
     notifyListeners();
     _run(_process(note.id!, note.segments.first.id!));
@@ -476,10 +486,15 @@ class AppState extends ChangeNotifier {
     if (path.isEmpty) return;
     try {
       final dictionary = settings.dictionary;
-      final t = dictionary.applyTo(await provider.transcribe(File(path),
+      final heard = dictionary.applyTo(await provider.transcribe(File(path),
           translate: settings.translate,
           vocabulary: dictionary.hints,
           speakers: settings.identifySpeakers));
+      final t = Transcription(
+          text: heard.text,
+          english: heard.english,
+          languageCode: heard.languageCode,
+          lines: await _recogniseYou(path, heard.lines));
       await _editSegment(
           noteId,
           segId,
@@ -501,13 +516,140 @@ class AppState extends ChangeNotifier {
           (s) => s.copyWith(status: NoteStatus.failed, error: _describe(e)));
       return;
     }
+    await _updateLiveNotes(noteId);
     await _afterTranscription(noteId);
+  }
+
+  /// Labels the owner's lines "You" when their voiceprint is set up and the
+  /// speaker models are downloaded. Any failure just leaves the labels as
+  /// they were.
+  Future<List<TimedLine>> _recogniseYou(
+      String audio, List<TimedLine> lines) async {
+    final mine = settings.voiceprint;
+    if (mine == null || !lines.any((l) => l.speaker != null)) return lines;
+    final models = settings.models.installedSpeakers();
+    if (models == null) return lines;
+    File? temp;
+    try {
+      var wav = audio;
+      if (p.extension(audio).toLowerCase() != '.wav') {
+        temp = await convertToWav16kMono(File(audio));
+        if (temp == null) return lines;
+        wav = temp.path;
+      }
+      return await recogniseYou(wav, lines, mine, models.embedding);
+    } catch (_) {
+      return lines;
+    } finally {
+      try {
+        await temp?.delete();
+      } catch (_) {}
+    }
+  }
+
+  final _live = <int, LiveSession>{};
+
+  /// The recording going on for note [id], if any.
+  LiveSession? live(int id) => _live[id];
+
+  /// Marks note [id] as being recorded: its parts are transcribed as they
+  /// arrive, but the title and summary wait for [endLive]. With [liveNotes],
+  /// that template's notes are updated as the text grows.
+  void beginLive(int id, {NoteTemplate? liveNotes}) {
+    final n = byId(id);
+    _live[id] = LiveSession(
+      liveNotes: liveNotes,
+      summarise: n == null || n.enrichedHash == null,
+      knownSegments: {for (final s in n?.segments ?? <Segment>[]) s.id!},
+    );
+  }
+
+  /// The recording of note [id] has ended. Once every part is transcribed,
+  /// the title and summary are written and the live notes get a last pass
+  /// over the full text. With [discard], none of that happens.
+  Future<void> endLive(int id, {bool discard = false}) async {
+    final s = _live[id];
+    if (s == null) return;
+    if (discard) {
+      _live.remove(id);
+      return;
+    }
+    s.ended = true;
+    notifyListeners();
+    if (byId(id)?.status != NoteStatus.processing) await _afterTranscription(id);
+  }
+
+  /// Folds the text transcribed since the last update into the live notes.
+  /// Waits for a few hundred characters and a few minutes between updates,
+  /// so an hour costs about a dozen requests.
+  Future<void> _updateLiveNotes(int id) async {
+    final s = _live[id];
+    final t = s?.liveNotes;
+    final n = byId(id);
+    if (s == null || t == null || n == null || s.ended || s.updating) return;
+    final fresh = n.segments
+        .where((g) =>
+            g.status == NoteStatus.done &&
+            !s.usedSegments.contains(g.id) &&
+            !s.knownSegments.contains(g.id))
+        .toList();
+    final text = fresh
+        .map((g) => g.english.trim().isNotEmpty ? g.english : g.transcript)
+        .map((x) => x.trim())
+        .where((x) => x.isNotEmpty)
+        .join('\n\n');
+    final due = s.updatedAt == null ||
+        DateTime.now().difference(s.updatedAt!) >= liveNotesEvery;
+    if (text.length < 300 || !due) return;
+    final provider = settings.textActive.canText
+        ? settings.build(settings.textActive)
+        : null;
+    if (provider == null) {
+      s.error = _noTextProvider;
+      notifyListeners();
+      return;
+    }
+    s.updating = true;
+    notifyListeners();
+    try {
+      final out = templateOutputFromReply(
+          t,
+          await provider.completeJson(liveNotesPrompt(t,
+              current: n.output(t.id)?.text ?? '', newText: text)));
+      s.usedSegments.addAll(fresh.map((g) => g.id!));
+      s.updatedAt = DateTime.now();
+      s.error = null;
+      await _edit(
+          id,
+          (cur) => cur.copyWith(
+              outputs: _withOutput(cur.outputs, out),
+              enrichedHash: textHash(n.transcript, n.english)));
+    } catch (e) {
+      s.error = _describe(e);
+    } finally {
+      s.updating = false;
+      notifyListeners();
+    }
   }
 
   Future<void> _afterTranscription(int noteId) async {
     final n = byId(noteId);
     // Wait until the last pending recording has finished.
     if (n == null || n.status == NoteStatus.processing) return;
+    final live = _live[noteId];
+    // Still recording: more is coming, so it is too early to sum up. A
+    // stand-in title keeps the note recognisable in the list meanwhile.
+    if (live != null && !live.ended) {
+      if (n.title.isEmpty && n.transcript.trim().isNotEmpty) {
+        await _edit(noteId, (n) => n.copyWith(title: _fallbackTitle(n.transcript)));
+      }
+      return;
+    }
+    if (live != null) {
+      _live.remove(noteId);
+      await _finishLive(noteId, live);
+      return;
+    }
     if (!n.hasEnrichment) {
       final text = n.english.isNotEmpty ? n.english : n.transcript;
       await _edit(
@@ -528,6 +670,32 @@ class AppState extends ChangeNotifier {
         provider != null) {
       await _summarize(noteId, provider);
     }
+  }
+
+  /// The last pass once a recording has ended: the title and summary, and the
+  /// live notes rewritten from the full text.
+  Future<void> _finishLive(int noteId, LiveSession live) async {
+    final n = byId(noteId);
+    if (n == null) return;
+    if (!n.hasEnrichment && n.title.isEmpty) {
+      final text = n.english.isNotEmpty ? n.english : n.transcript;
+      await _edit(
+          noteId,
+          (n) => n.copyWith(
+              title: text.trim().isEmpty
+                  ? 'No speech detected'
+                  : _fallbackTitle(text)));
+    }
+    if (n.transcript.trim().isEmpty) return;
+    final provider = settings.textActive.canText
+        ? settings.build(settings.textActive)
+        : null;
+    if (provider == null) return;
+    if (settings.autoSummary && live.summarise) {
+      await _summarize(noteId, provider);
+    }
+    final t = live.liveNotes;
+    if (t != null) await applyTemplate(noteId, t);
   }
 
   Future<void> _summarize(int noteId, AiProvider provider) async {
@@ -584,8 +752,7 @@ class AppState extends ChangeNotifier {
     final provider = settings.build(settings.textActive);
     if (provider == null || !settings.textActive.canText) return _noTextProvider;
     try {
-      final out = await buildTemplateOutput(provider, t,
-          transcript: n.transcript, english: n.english);
+      final out = await buildTemplateOutput(provider, t, n);
       final hash = n.hasEnrichment && n.isStale
           ? n.enrichedHash
           : textHash(n.transcript, n.english);
@@ -641,8 +808,7 @@ class AppState extends ChangeNotifier {
       final outputs = [
         for (final o in n.outputs)
           switch (settings.template(o.templateId)) {
-            final t? => await buildTemplateOutput(provider, t,
-                transcript: n.transcript, english: n.english),
+            final t? => await buildTemplateOutput(provider, t, n),
             null => o,
           },
       ];
@@ -698,4 +864,32 @@ class AppState extends ChangeNotifier {
     if (e is SocketException) return 'No internet connection.';
     return e.toString();
   }
+}
+
+/// How often live notes are updated while recording.
+const liveNotesEvery = Duration(minutes: 3);
+
+/// A recording in progress on a note; see [AppState.beginLive].
+class LiveSession {
+  /// The template whose notes are kept up to date while recording.
+  NoteTemplate? liveNotes;
+
+  /// Write the title and summary at the end: the note had none before.
+  final bool summarise;
+
+  /// Recordings the note already had; live notes cover only the new ones.
+  final Set<int> knownSegments;
+
+  /// Recordings already folded into the live notes.
+  final usedSegments = <int>{};
+
+  DateTime? updatedAt;
+  bool updating = false;
+  bool ended = false;
+
+  /// Why the last live notes update failed, if it did.
+  String? error;
+
+  LiveSession(
+      {this.liveNotes, required this.summarise, required this.knownSegments});
 }

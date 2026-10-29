@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -7,7 +8,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/app_state.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
+import '../providers/voice_match.dart';
 import '../services/model_store.dart';
+import '../services/recorder_service.dart';
 import 'dictionary_page.dart';
 import 'links.dart';
 import 'tags.dart';
@@ -198,6 +201,15 @@ class SettingsPage extends StatelessWidget {
                           state.refresh();
                         },
                 ),
+                const Divider(),
+                _row(
+                    context,
+                    Icons.person_outline,
+                    'Your voice',
+                    s.voiceprint == null
+                        ? 'Not set up'
+                        : 'Set up · your lines are labelled "You"',
+                    const _VoicePage()),
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.spellcheck),
@@ -486,6 +498,210 @@ class _WrittenByPage extends StatelessWidget {
             onTap: () => _open(context, const _ApiKeysPage()),
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// Read aloud to record a voice sample: a mix of sounds, about 20 seconds.
+const _samplePassage =
+    'The quick brown fox jumps over the lazy dog. I record my notes on this '
+    'phone, and later I read them back. On Monday we met at half past nine '
+    'to plan the week, check the numbers and agree on what comes next.';
+
+/// How long the voice sample records for.
+const _sampleLength = Duration(seconds: 20);
+
+/// Records a short sample of the owner's voice, so their lines in
+/// transcripts can be labelled "You".
+class _VoicePage extends StatefulWidget {
+  const _VoicePage();
+
+  @override
+  State<_VoicePage> createState() => _VoicePageState();
+}
+
+class _VoicePageState extends State<_VoicePage> {
+  final _recorder = RecorderService();
+  final _clock = Stopwatch();
+  Timer? _ticker;
+  bool _recording = false;
+  bool _working = false;
+  String? _message;
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _recorder.dispose();
+    super.dispose();
+  }
+
+  Future<void> _record(AppState state) async {
+    final models = state.settings.models.installedSpeakers();
+    if (models == null) return;
+    try {
+      await _recorder.start(RecordingFormat.wav16kMono);
+    } on MicPermissionDenied {
+      setState(() => _message =
+          'Microphone access is off. Enable it for Voice Notes in system settings.');
+      return;
+    }
+    _clock
+      ..reset()
+      ..start();
+    setState(() {
+      _recording = true;
+      _message = null;
+    });
+    _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (_clock.elapsed >= _sampleLength) {
+        _finish(state, models.embedding);
+      } else {
+        setState(() {});
+      }
+    });
+  }
+
+  Future<void> _finish(AppState state, String embedding) async {
+    _ticker?.cancel();
+    _clock.stop();
+    final sample = await _recorder.stop();
+    setState(() {
+      _recording = false;
+      _working = true;
+    });
+    String message;
+    try {
+      final print =
+          sample == null ? null : await voiceprintOf(sample.path, embedding);
+      if (print == null) {
+        message = 'That was too quiet to use. Try again somewhere quieter.';
+      } else {
+        await state.settings.setVoiceprint(print);
+        state.refresh();
+        message = 'Saved. New recordings label your lines "You".';
+      }
+    } catch (e) {
+      message = 'Could not read the sample: $e';
+    } finally {
+      if (sample != null) {
+        try {
+          await File(sample.path).delete();
+        } catch (_) {}
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _working = false;
+        _message = message;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final models = context.watch<ModelStore>();
+    final s = state.settings;
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant, height: 1.5);
+    final ready = models.isInstalled(speakerModelsId);
+    return _SubPage(
+      title: 'Your voice',
+      children: [
+        Text(
+          'Read a short passage aloud once. Voice Notes then recognises you '
+          'in recordings and labels your lines "You", which speaking feedback '
+          'uses. Your voiceprint stays on this phone.',
+          style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'It works when "Identify speakers" is on, with Gemini or On this '
+          'device. Short replies and people talking over each other may not '
+          'be recognised; rename a speaker on the note if it gets one wrong.',
+          style: muted,
+        ),
+        const SizedBox(height: 16),
+        if (!ready)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _SpeakerModelsRow(
+                installed: false,
+                downloading: models.downloading == speakerModelsId,
+                busy: models.downloading != null,
+                progress: models.progress,
+                onDownload: () => _downloadModel(
+                    context, s, models, speakerModelsId, state.refresh),
+                onCancel: models.cancel,
+                onDelete: () {},
+              ),
+            ),
+          )
+        else
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                      _recording
+                          ? 'Keep reading… ${(_sampleLength - _clock.elapsed).inSeconds + 1} s'
+                          : 'Read this aloud at your normal pace',
+                      style: theme.textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  Text(_samplePassage,
+                      style: theme.textTheme.bodyLarge?.copyWith(height: 1.5)),
+                  if (_recording) ...[
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                        value: _clock.elapsedMilliseconds /
+                            _sampleLength.inMilliseconds),
+                  ],
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _recording || _working
+                        ? null
+                        : () => _record(state),
+                    icon: _working
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.mic),
+                    label: Text(_working
+                        ? 'Saving…'
+                        : s.voiceprint == null
+                            ? 'Record sample'
+                            : 'Record again'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (_message != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+            child: Text(_message!, style: theme.textTheme.bodyMedium),
+          ),
+        if (s.voiceprint != null) ...[
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete my voiceprint'),
+              subtitle: const Text('New recordings stop labelling you.'),
+              onTap: () async {
+                await s.setVoiceprint(null);
+                state.refresh();
+                if (mounted) setState(() => _message = 'Voiceprint deleted.');
+              },
+            ),
+          ),
+        ],
       ],
     );
   }

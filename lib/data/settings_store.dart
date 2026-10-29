@@ -74,11 +74,32 @@ class SettingsStore {
   NoteTemplate? template(String id) =>
       allTemplates.where((t) => t.id == id).firstOrNull;
 
+  /// The template last picked for live notes while recording, if it is
+  /// still offered.
+  NoteTemplate? get liveNotesTemplate {
+    final id = _prefs.getString('liveNotes');
+    return enabledTemplates
+        .where((t) => t.id == id && !t.isClinical)
+        .firstOrNull;
+  }
+
+  Future<void> setLiveNotes(String? id) async {
+    if (id == null) {
+      await _prefs.remove('liveNotes');
+    } else {
+      await _prefs.setString('liveNotes', id);
+    }
+  }
+
   /// Remove a recording's audio file once its text has been saved.
   bool deleteAudioAfter = false;
 
   /// Label who is speaking, where the provider can tell voices apart.
   bool identifySpeakers = false;
+
+  /// The owner's voiceprint, so their lines can be labelled "You"; null
+  /// until they record a sample. Kept on the phone only.
+  List<double>? voiceprint;
 
   /// Names and terms the user wants spelled a certain way.
   Dictionary dictionary = Dictionary();
@@ -109,6 +130,7 @@ class SettingsStore {
           if (wasClinical) clinicalTemplateId,
         };
     customTemplates = _customFrom(_prefs.getString('customTemplates'));
+    voiceprint = _voiceprintFrom(_prefs.getString('voiceprint'));
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -222,6 +244,24 @@ class SettingsStore {
   Future<void> deleteTemplate(String id) async {
     customTemplates = customTemplates.where((t) => t.id != id).toList();
     await _saveCustom();
+  }
+
+  Future<void> setVoiceprint(List<double>? v) async {
+    voiceprint = v;
+    if (v == null) {
+      await _prefs.remove('voiceprint');
+    } else {
+      await _prefs.setString('voiceprint', jsonEncode(v));
+    }
+  }
+
+  static List<double>? _voiceprintFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return [for (final x in jsonDecode(raw) as List) (x as num).toDouble()];
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _saveCustom() => _prefs.setString('customTemplates',

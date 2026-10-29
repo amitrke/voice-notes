@@ -96,7 +96,7 @@ void main() {
       final s = await _load({});
       expect(s.clinical, isFalse);
       expect(s.enabledTemplates.map((t) => t.id),
-          ['meeting', 'todo', 'recipe', 'grammar']);
+          ['meeting', 'todo', 'recipe', 'grammar', speakingTemplateId]);
     });
 
     test('clinical work carries over from the old settings', () async {
@@ -123,6 +123,7 @@ void main() {
         'Meeting minutes',
         'To-do list',
         'Recipe',
+        'Speaking feedback',
         'Clinical note',
         'Sermon outline',
       ]);

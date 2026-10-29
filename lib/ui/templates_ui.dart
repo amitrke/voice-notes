@@ -16,6 +16,7 @@ IconData templateIcon(String id) => switch (id) {
       'todo' => Icons.checklist,
       'recipe' => Icons.restaurant_menu,
       'grammar' => Icons.spellcheck,
+      speakingTemplateId => Icons.record_voice_over_outlined,
       clinicalTemplateId => Icons.medical_services_outlined,
       _ => Icons.description_outlined,
     };

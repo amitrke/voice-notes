@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../data/templates.dart';
 import '../providers/ai_provider.dart';
+import '../providers/voice_match.dart';
 
 enum NoteStatus { processing, done, failed }
 
@@ -191,6 +192,7 @@ class Note {
   String speakerLabel(String id) {
     final named = speakerNames[id]?.trim() ?? '';
     if (named.isNotEmpty) return named;
+    if (id == youSpeakerId) return 'You';
     final number = RegExp(r'\d+').firstMatch(id)?.group(0);
     final index = number != null
         ? int.parse(number)
