@@ -1,0 +1,1 @@
+voice,notes,transcribe,speech,text,translate,Hindi,dictation,recorder,audio,summary,multilingual

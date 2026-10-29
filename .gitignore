@@ -49,3 +49,9 @@ app.*.map.json
 
 # Icon design previews (assets/icon and docs/store-assets are the real outputs)
 /tool/icon/out/
+
+# fastlane run output (fastlane/metadata is tracked)
+/fastlane/report.xml
+/fastlane/README.md
+/fastlane/test_output/
+/vendor/bundle/

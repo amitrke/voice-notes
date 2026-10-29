@@ -9,12 +9,19 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/app_state.dart';
-import '../data/clinical_export.dart';
+import '../data/srt_export.dart';
+import '../data/templates.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
 import 'audio_input.dart';
+import 'clinical_page.dart';
+import 'folders.dart';
 import 'format.dart';
+import 'stale_banner.dart';
+import 'tags.dart';
+import 'templates_ui.dart';
 import 'text_size.dart';
+import 'theme.dart';
 
 class NotePage extends StatefulWidget {
   final int noteId;
@@ -27,22 +34,62 @@ class NotePage extends StatefulWidget {
 class _NotePageState extends State<NotePage> {
   bool _showEnglish = false;
   bool _enriching = false;
+  final _playback = Playback();
 
-  Future<void> _enrich(AppState state, int id) async {
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _enriching = true);
-    final err = await state.enrichClinical(id);
-    if (mounted) setState(() => _enriching = false);
-    if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
+  @override
+  void dispose() {
+    _playback.dispose();
+    super.dispose();
   }
 
-  Future<void> _exportTxt(Note note) async {
+  Future<void> _exportSrt(Note note, {required bool english}) async {
     final dir = await getTemporaryDirectory();
     final safe = note.title.replaceAll(RegExp(r'[^\w\- ]+'), '').trim();
-    final file =
-        File('${dir.path}/${safe.isEmpty ? 'clinical-note' : safe}.txt');
-    await file.writeAsString(clinicalReportText(note));
+    final file = File('${dir.path}/${safe.isEmpty ? 'subtitles' : safe}'
+        '${english ? ' (English)' : ''}.srt');
+    await file.writeAsString(srtText(note, english: english));
     await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+  }
+
+  /// Opens what template [templateId] made from note [id].
+  void _openOutput(int id, String templateId) => Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => templateId == clinicalTemplateId
+              ? ClinicalPage(noteId: id)
+              : TemplateOutputPage(noteId: id, templateId: templateId)));
+
+  bool _made(Note n, String templateId) => templateId == clinicalTemplateId
+      ? n.clinical != null
+      : n.output(templateId) != null;
+
+  /// Asks which template to use, makes it unless it already exists, and
+  /// opens the result.
+  Future<void> _turnInto(AppState state, Note note) async {
+    final made = {
+      for (final t in state.settings.allTemplates)
+        if (_made(note, t.id)) t.id,
+    };
+    final choice = await showTurnIntoSheet(context, state, made);
+    if (!mounted || choice == null) return;
+    final NoteTemplate? t = switch (choice) {
+      UseTemplate(:final template) => template,
+      MakeTemplate() => await editTemplate(context, state, null),
+    };
+    if (t == null || !mounted) return;
+    if (made.contains(t.id)) {
+      _openOutput(note.id!, t.id);
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _enriching = true);
+    final err = await state.applyTemplate(note.id!, t);
+    if (mounted) setState(() => _enriching = false);
+    if (err != null) {
+      messenger.showSnackBar(SnackBar(content: Text(err)));
+    } else if (mounted) {
+      _openOutput(note.id!, t.id);
+    }
   }
 
   bool _regenerating = false;
@@ -116,6 +163,16 @@ class _NotePageState extends State<NotePage> {
     ));
   }
 
+  /// Lets the user give each voice a name; "Speaker 1" until they do.
+  Future<void> _nameSpeakers(AppState state, int noteId) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => _SpeakerNames(noteId: noteId),
+    );
+  }
+
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context)
@@ -134,20 +191,26 @@ class _NotePageState extends State<NotePage> {
         !isEnglish(note.languageCode) &&
         note.english.trim() != note.transcript.trim();
     final showEnglish = _showEnglish && hasEnglish;
-    final text = showEnglish ? note.english : note.transcript;
+    final labelled = hasSpeakers(note);
+    // With speakers known, copy and share carry "Name: ..." paragraphs.
+    final text = labelled
+        ? speakerTranscript(note, english: showEnglish)
+        : (showEnglish ? note.english : note.transcript);
     final lang = languageLabel(note.languageCode);
+
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final ready =
+        note.status == NoteStatus.done || note.transcript.trim().isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(note.status == NoteStatus.done && note.title.isNotEmpty
-            ? note.title
-            : 'Note'),
         actions: [
           if (text.trim().isNotEmpty || note.summary.isNotEmpty)
             Builder(
               builder: (buttonContext) => IconButton(
                 tooltip: 'Share',
-                icon: Icon(Theme.of(context).platform == TargetPlatform.iOS
+                icon: Icon(theme.platform == TargetPlatform.iOS
                     ? Icons.ios_share
                     : Icons.share_outlined),
                 onPressed: () => _share(buttonContext, note, text),
@@ -170,92 +233,176 @@ class _NotePageState extends State<NotePage> {
                 await _regenerate(state, note.id!);
               } else if (v == 'retry') {
                 await state.retry(note.id!);
+              } else if (v == 'srt') {
+                await _exportSrt(note, english: showEnglish);
+              } else if (v == 'folder') {
+                await moveNoteToFolder(context, note);
+              } else if (v == 'tags') {
+                await editNoteTags(context, note.id!);
+              } else if (v == 'speakers') {
+                await _nameSpeakers(state, note.id!);
               }
             },
             itemBuilder: (_) => [
               if (note.status == NoteStatus.done)
                 PopupMenuItem(
                     value: 'regenerate',
-                    child: Text(note.clinical != null
-                        ? 'Regenerate summary and clinical note'
+                    child: Text(note.clinical != null || note.outputs.isNotEmpty
+                        ? 'Regenerate summary and what was made from it'
                         : 'Regenerate summary')),
+              if (hasTimedText(note))
+                PopupMenuItem(
+                    value: 'srt',
+                    child: Text(showEnglish
+                        ? 'Export English subtitles (SRT)'
+                        : 'Export subtitles (SRT)')),
+              if (labelled)
+                const PopupMenuItem(
+                    value: 'speakers', child: Text('Name the speakers')),
               const PopupMenuItem(
-                  value: 'retry', child: Text('Transcribe again')),
+                  value: 'folder', child: Text('Move to folder')),
+              const PopupMenuItem(value: 'tags', child: Text('Edit tags')),
+              if (note.segments.any((s) => s.hasAudio))
+                const PopupMenuItem(
+                    value: 'retry', child: Text('Transcribe again')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            [
-              formatDate(note.createdAt),
-              ?lang,
-              ProviderId.values.asNameMap()[note.provider]?.label ??
-                  note.provider,
-            ].join(' · '),
-            style: Theme.of(context).textTheme.bodySmall,
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          border: Border(top: BorderSide(color: scheme.outlineVariant)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Row(children: [
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: scheme.secondary,
+                      foregroundColor: scheme.onSecondary),
+                  onPressed: () => recordAudio(context, noteId: note.id),
+                  icon: const Icon(Icons.mic_none_rounded, size: 20),
+                  label: const Text('Add recording'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => importAudio(context, noteId: note.id),
+                  icon: const Icon(Icons.file_upload_outlined, size: 20),
+                  label: const Text('Import audio'),
+                ),
+              ),
+            ]),
           ),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              switch (note.status) {
+                NoteStatus.processing when note.title.isEmpty =>
+                  'Transcribing…',
+                NoteStatus.failed when note.title.isEmpty =>
+                  'Transcription failed',
+                _ => note.title.isEmpty ? 'Untitled note' : note.title,
+              },
+              style: theme.textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700, height: 1.2),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              [
+                formatDate(note.createdAt),
+                if (note.durationMs != null) formatDuration(note.durationMs!),
+                ?lang,
+                ProviderId.values.asNameMap()[note.provider]?.label ??
+                    note.provider,
+                ?state.folders
+                    .where((f) => f.id == note.folderId)
+                    .firstOrNull
+                    ?.name,
+              ].join(' · '),
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          const SizedBox(height: 8),
+          NoteTags(note: note),
           const SizedBox(height: 12),
-          if (note.isStale && note.status != NoteStatus.processing)
-            _StaleBanner(
-              message: note.clinical != null
-                  ? 'Recordings changed after the title, summary and clinical '
-                      'note were written, so they may no longer match.'
+          if (note.isStale && note.status != NoteStatus.processing) ...[
+            StaleBanner(
+              message: note.clinical != null || note.outputs.isNotEmpty
+                  ? 'Recordings changed after the title, summary and what was '
+                      'made from this note were written, so they may no '
+                      'longer match.'
                   : 'Recordings changed after the title and summary were '
                       'written, so they may no longer match.',
               busy: _regenerating,
               onRegenerate: () => _regenerate(state, note.id!),
             ),
-          for (final (i, seg) in note.segments.indexed)
-            _SegmentTile(
-              key: ValueKey(seg.id),
-              index: i,
-              segment: seg,
-              count: note.segments.length,
-              onRetry: () => state.retrySegment(note.id!, seg.id!),
-              onDelete: () => _deleteSegment(state, note, seg),
+            const SizedBox(height: 12),
+          ],
+          if (note.segments.isNotEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                child: Column(
+                  children: [
+                    for (final (i, seg) in note.segments.indexed) ...[
+                      if (i > 0) const Divider(height: 16),
+                      _SegmentTile(
+                        key: ValueKey(seg.id),
+                        index: i,
+                        segment: seg,
+                        count: note.segments.length,
+                        playback: _playback,
+                        onRetry: () => state.retrySegment(note.id!, seg.id!),
+                        onDelete: () => _deleteSegment(state, note, seg),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          Text('Add recording', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => recordAudio(context, noteId: note.id),
-                icon: const Icon(Icons.mic, size: 18),
-                label: const Text('Record'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => importAudio(context, noteId: note.id),
-                icon: const Icon(Icons.upload_file, size: 18),
-                label: const Text('Import'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (note.status == NoteStatus.done ||
-              note.transcript.trim().isNotEmpty) ...[
-            if (note.summary.isNotEmpty)
+          if (ready) ...[
+            if (note.summary.isNotEmpty) ...[
+              const SizedBox(height: 12),
               Card(
+                color: scheme.primaryContainer,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
                 child: Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Summary',
-                          style: Theme.of(context).textTheme.labelLarge),
-                      const SizedBox(height: 4),
-                      SelectableText(note.summary),
+                      SectionLabel('Summary',
+                          padding: const EdgeInsets.only(bottom: 6),
+                          color: scheme.primary),
+                      SelectableText(note.summary,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                              color: scheme.onPrimaryContainer, height: 1.5)),
                     ],
                   ),
                 ),
               ),
-            const SizedBox(height: 12),
-            if (hasEnglish)
+            ],
+            const SizedBox(height: 16),
+            if (hasEnglish) ...[
               SegmentedButton<bool>(
+                showSelectedIcon: false,
                 segments: [
                   ButtonSegment(value: false, label: Text(lang ?? 'Original')),
                   const ButtonSegment(value: true, label: Text('English')),
@@ -264,193 +411,86 @@ class _NotePageState extends State<NotePage> {
                 onSelectionChanged: (s) =>
                     setState(() => _showEnglish = s.first),
               ),
-            const SizedBox(height: 12),
-            SelectableText(
-              text.isEmpty ? 'No speech detected.' : text,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5),
+              const SizedBox(height: 16),
+            ],
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: text.isNotEmpty && hasTimedText(note)
+                  ? _TimedTranscript(
+                      note: note, english: showEnglish, playback: _playback)
+                  : SelectableText(
+                      text.isEmpty ? 'No speech detected.' : text,
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(fontSize: 17, height: 1.6),
+                    ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             if (text.isNotEmpty)
               Align(
                 alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => _copy(text, showEnglish ? 'English text' : 'Transcript'),
+                child: OutlinedButton.icon(
+                  onPressed: () => _copy(
+                      text, showEnglish ? 'English text' : 'Transcript'),
                   icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy'),
+                  label: const Text('Copy text'),
                 ),
               ),
             if (note.transcript.trim().isNotEmpty)
-              ..._clinicalSection(state, note),
+              ..._templatesEntry(state, note),
           ],
         ],
       ),
     );
   }
-}
 
-extension on _NotePageState {
-  List<Widget> _clinicalSection(AppState state, Note note) {
+  /// What was made from the note with templates, and the "Turn into…"
+  /// button.
+  List<Widget> _templatesEntry(AppState state, Note note) {
+    final scheme = Theme.of(context).colorScheme;
     final c = note.clinical;
-    if (c == null) {
-      if (!state.settings.clinical) return const [];
-      return [
-        const Divider(height: 32),
-        FilledButton.icon(
-          onPressed: _enriching ? null : () => _enrich(state, note.id!),
-          icon: _enriching
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.medical_services_outlined),
-          label: Text(_enriching ? 'Working…' : 'Create clinical note'),
-        ),
-      ];
-    }
-    final lang = languageLabel(note.languageCode);
+    Widget card(String templateId, String name, String detail) => Card(
+          child: ListTile(
+            contentPadding: const EdgeInsets.fromLTRB(16, 6, 12, 6),
+            leading: Icon(templateIcon(templateId), color: scheme.primary),
+            title: Text(name,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle:
+                Text(note.isStale ? 'Out of date. Regenerate before use.' : detail),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _openOutput(note.id!, templateId),
+          ),
+        );
+    final cards = [
+      if (c != null)
+        card(
+            clinicalTemplateId,
+            'Clinical note',
+            c.verify.isEmpty
+                ? 'Interpretation and note'
+                : 'Interpretation, note and ${c.verify.length} '
+                    '${c.verify.length == 1 ? 'item' : 'items'} to verify'),
+      for (final o in note.outputs)
+        card(o.templateId, o.name,
+            o.sections.map((s) => s.heading).where((h) => h.isNotEmpty).join(', ')),
+    ];
     return [
-      const Divider(height: 32),
-      Text('Clinical scribe', style: Theme.of(context).textTheme.titleMedium),
-      const SizedBox(height: 8),
-      if (note.isStale)
-        _StaleBanner(
-          message: 'This clinical note was written before the recordings '
-              'changed. Do not rely on it until it is regenerated.',
-          busy: _regenerating,
-          onRegenerate: () => _regenerate(state, note.id!),
-        ),
-      if (c.verify.isNotEmpty) _VerifyCard(items: c.verify),
-      if (c.interpretation.isNotEmpty)
-        _ClinicalCard(
-            title: 'Clinical interpretation',
-            body: c.interpretation,
-            onCopy: () => _copy(c.interpretation, 'Interpretation')),
-      if (c.noteEnglish.isNotEmpty)
-        _ClinicalCard(
-            title: 'Clinical note — English',
-            body: c.noteEnglish,
-            onCopy: () => _copy(c.noteEnglish, 'Clinical note')),
-      if (c.noteNative.isNotEmpty)
-        _ClinicalCard(
-            title: 'Clinical note — ${lang ?? 'original language'}',
-            body: c.noteNative,
-            onCopy: () => _copy(c.noteNative, 'Clinical note')),
-      const SizedBox(height: 4),
-      Wrap(spacing: 8, children: [
-        OutlinedButton.icon(
-          onPressed: () => _exportTxt(note),
-          icon: const Icon(Icons.ios_share, size: 18),
-          label: const Text('Export TXT'),
-        ),
-        OutlinedButton.icon(
-          onPressed: () => _copy(clinicalReportText(note), 'Full report'),
-          icon: const Icon(Icons.copy, size: 18),
-          label: const Text('Copy all'),
-        ),
-      ]),
-      const SizedBox(height: 8),
-      Text(
-        'AI-generated draft. A clinician must review it before use.',
-        style: Theme.of(context).textTheme.bodySmall,
+      if (cards.isNotEmpty) ...[
+        const SectionLabel('Made from this note',
+            padding: EdgeInsets.fromLTRB(4, 24, 4, 8)),
+        ...cards,
+      ],
+      const SizedBox(height: 16),
+      FilledButton.icon(
+        onPressed: _enriching ? null : () => _turnInto(state, note),
+        icon: _enriching
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.auto_fix_high),
+        label: Text(_enriching ? 'Working…' : 'Turn into…'),
       ),
     ];
-  }
-}
-
-class _ClinicalCard extends StatelessWidget {
-  final String title;
-  final String body;
-  final VoidCallback onCopy;
-  const _ClinicalCard(
-      {required this.title, required this.body, required this.onCopy});
-
-  @override
-  Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Expanded(
-                    child: Text(title,
-                        style: Theme.of(context).textTheme.labelLarge)),
-                IconButton(
-                    tooltip: 'Copy',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onCopy,
-                    icon: const Icon(Icons.copy, size: 18)),
-              ]),
-              SelectableText(body, style: const TextStyle(height: 1.5)),
-            ],
-          ),
-        ),
-      );
-}
-
-class _VerifyCard extends StatelessWidget {
-  final List<String> items;
-  const _VerifyCard({required this.items});
-
-  @override
-  Widget build(BuildContext context) => Card(
-        color: Theme.of(context).colorScheme.tertiaryContainer,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Verification required',
-                  style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 4),
-              for (final i in items) SelectableText('⚠ $i'),
-            ],
-          ),
-        ),
-      );
-}
-
-class _StaleBanner extends StatelessWidget {
-  final String message;
-  final bool busy;
-  final VoidCallback onRegenerate;
-  const _StaleBanner(
-      {required this.message, required this.busy, required this.onRegenerate});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Icon(Icons.update, color: scheme.onErrorContainer),
-              const SizedBox(width: 8),
-              Text('Out of date',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: scheme.onErrorContainer)),
-            ]),
-            const SizedBox(height: 4),
-            Text(message, style: TextStyle(color: scheme.onErrorContainer)),
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              onPressed: busy ? null : onRegenerate,
-              icon: busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh, size: 18),
-              label: Text(busy ? 'Working…' : 'Regenerate'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -459,6 +499,7 @@ class _SegmentTile extends StatelessWidget {
   final int index;
   final int count;
   final Segment segment;
+  final Playback playback;
   final VoidCallback onRetry;
   final VoidCallback onDelete;
   const _SegmentTile({
@@ -466,6 +507,7 @@ class _SegmentTile extends StatelessWidget {
     required this.index,
     required this.count,
     required this.segment,
+    required this.playback,
     required this.onRetry,
     required this.onDelete,
   });
@@ -497,7 +539,29 @@ class _SegmentTile extends StatelessWidget {
                 onPressed: onDelete,
               ),
             ]),
-          _AudioBar(path: seg.audioPath, knownDurationMs: seg.durationMs),
+          if (seg.hasAudio)
+            _AudioBar(
+              path: seg.audioPath,
+              knownDurationMs: seg.durationMs,
+              segmentId: seg.id!,
+              playback: playback,
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(children: [
+                Icon(Icons.delete_sweep_outlined,
+                    size: 18, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Audio deleted after transcription. The text is kept.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ]),
+            ),
           if (seg.status == NoteStatus.processing)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
@@ -538,7 +602,14 @@ class _AudioBar extends StatefulWidget {
   /// Length recorded when the audio was captured, shown until the player
   /// has loaded the file and reports its own.
   final int? knownDurationMs;
-  const _AudioBar({required this.path, this.knownDurationMs});
+  final int segmentId;
+  final Playback playback;
+  const _AudioBar({
+    required this.path,
+    this.knownDurationMs,
+    required this.segmentId,
+    required this.playback,
+  });
 
   @override
   State<_AudioBar> createState() => _AudioBarState();
@@ -557,11 +628,23 @@ class _AudioBarState extends State<_AudioBar> {
     super.initState();
     _missing = !File(widget.path).existsSync();
     _subs
-      ..add(_player.onPlayerStateChanged.listen((s) => setState(() => _state = s)))
-      ..add(_player.onPositionChanged.listen((d) => setState(() => _pos = d)))
+      ..add(_player.onPlayerStateChanged.listen((s) {
+        setState(() => _state = s);
+        if (s == PlayerState.playing) widget.playback.started(widget.segmentId);
+      }))
+      ..add(_player.onPositionChanged.listen((d) {
+        setState(() => _pos = d);
+        widget.playback.moved(widget.segmentId, d.inMilliseconds);
+      }))
       ..add(_player.onDurationChanged.listen((d) => setState(() => _dur = d)))
-      ..add(_player.onPlayerComplete
-          .listen((_) => setState(() => _pos = Duration.zero)));
+      ..add(_player.onPlayerComplete.listen((_) {
+        setState(() => _pos = Duration.zero);
+        widget.playback.stopped(widget.segmentId);
+      }));
+    if (!_missing) {
+      widget.playback.attach(widget.segmentId,
+          playFrom: _playFrom, pause: _player.pause);
+    }
     // Loading the file up front gives the length (imports don't record one)
     // and lets the slider seek before the first play.
     if (!_missing) _player.setSource(DeviceFileSource(widget.path));
@@ -569,11 +652,22 @@ class _AudioBarState extends State<_AudioBar> {
 
   @override
   void dispose() {
+    widget.playback.detach(widget.segmentId);
     for (final s in _subs) {
       s.cancel();
     }
     _player.dispose();
     super.dispose();
+  }
+
+  Future<void> _playFrom(int ms) async {
+    if (_state == PlayerState.playing || _state == PlayerState.paused) {
+      await _player.seek(Duration(milliseconds: ms));
+      if (_state == PlayerState.paused) await _player.resume();
+    } else {
+      await _player.play(DeviceFileSource(widget.path),
+          position: Duration(milliseconds: ms));
+    }
   }
 
   Future<void> _toggle() async {
@@ -595,7 +689,8 @@ class _AudioBarState extends State<_AudioBar> {
         _dur > Duration.zero ? _dur.inMilliseconds : widget.knownDurationMs;
     return Row(
       children: [
-        IconButton.filledTonal(
+        IconButton.filled(
+          tooltip: playing ? 'Pause' : 'Play',
           onPressed: _toggle,
           icon: Icon(playing ? Icons.pause : Icons.play_arrow),
         ),
@@ -617,6 +712,228 @@ class _AudioBarState extends State<_AudioBar> {
           style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
         ),
       ],
+    );
+  }
+}
+
+/// Links a note's players to its transcript: which recording is playing and
+/// where, and a way for a tapped line to start playback there.
+class Playback extends ChangeNotifier {
+  final _players =
+      <int, ({Future<void> Function(int) playFrom, Future<void> Function() pause})>{};
+  int? _segment;
+  int _posMs = 0;
+
+  /// The recording playing (or last paused), if any.
+  int? get segment => _segment;
+  int get positionMs => _posMs;
+
+  void attach(int segmentId,
+          {required Future<void> Function(int) playFrom,
+          required Future<void> Function() pause}) =>
+      _players[segmentId] = (playFrom: playFrom, pause: pause);
+
+  void detach(int segmentId) => _players.remove(segmentId);
+
+  /// Plays [segmentId] from [ms], pausing any other recording.
+  Future<void> playAt(int segmentId, int ms) async {
+    for (final e in _players.entries) {
+      if (e.key != segmentId) await e.value.pause();
+    }
+    _segment = segmentId;
+    _posMs = ms;
+    notifyListeners();
+    await _players[segmentId]?.playFrom(ms);
+  }
+
+  void started(int segmentId) {
+    if (_segment == segmentId) return;
+    _segment = segmentId;
+    notifyListeners();
+  }
+
+  void moved(int segmentId, int ms) {
+    _segment = segmentId;
+    _posMs = ms;
+    notifyListeners();
+  }
+
+  void stopped(int segmentId) {
+    if (_segment != segmentId) return;
+    _segment = null;
+    _posMs = 0;
+    notifyListeners();
+  }
+}
+
+/// The transcript line by line. The line being played is highlighted, and
+/// tapping a line plays the recording from there. Recordings without
+/// timestamps show as plain text.
+class _TimedTranscript extends StatelessWidget {
+  final Note note;
+  final bool english;
+  final Playback playback;
+  const _TimedTranscript(
+      {required this.note, required this.english, required this.playback});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final style =
+        theme.textTheme.bodyLarge?.copyWith(fontSize: 17, height: 1.6);
+    final done =
+        note.segments.where((s) => s.status == NoteStatus.done).toList();
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        final children = <Widget>[];
+        for (final seg in done) {
+          // English needs every line translated to follow along; otherwise
+          // fall back to the recording's English text as a whole.
+          final timed = seg.lines.isNotEmpty &&
+              (!english || seg.lines.every((l) => l.english.isNotEmpty));
+          if (children.isNotEmpty) children.add(const SizedBox(height: 12));
+          if (!timed) {
+            final plain = english && seg.english.trim().isNotEmpty
+                ? seg.english
+                : seg.transcript;
+            if (plain.trim().isNotEmpty) {
+              children.add(SelectableText(plain.trim(), style: style));
+            }
+            continue;
+          }
+          String? lastSpeaker;
+          for (final l in seg.lines) {
+            if (l.speaker != null && l.speaker != lastSpeaker) {
+              children.add(Padding(
+                padding: const EdgeInsets.fromLTRB(6, 10, 6, 0),
+                child: Text(
+                  note.speakerLabel(l.speaker!),
+                  style: theme.textTheme.labelLarge?.copyWith(
+                      color: _speakerColor(scheme, l.speaker!, note),
+                      fontWeight: FontWeight.w700),
+                ),
+              ));
+            }
+            lastSpeaker = l.speaker;
+            final active = playback.segment == seg.id &&
+                playback.positionMs >= l.startMs &&
+                playback.positionMs < l.endMs;
+            children.add(InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => playback.playAt(seg.id!, l.startMs),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: active ? scheme.secondaryContainer : null,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  english ? l.english : l.text,
+                  style: style?.copyWith(
+                      color: active ? scheme.onSecondaryContainer : null),
+                ),
+              ),
+            ));
+          }
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        );
+      },
+    );
+  }
+}
+
+/// A steady colour per voice, so turns are easy to tell apart.
+Color _speakerColor(ColorScheme scheme, String id, Note note) {
+  final palette = [
+    scheme.primary,
+    scheme.tertiary,
+    scheme.secondary,
+    scheme.error,
+  ];
+  final i = note.speakerIds.indexOf(id);
+  return palette[(i < 0 ? 0 : i) % palette.length];
+}
+
+/// Sheet to rename the voices heard in a note.
+class _SpeakerNames extends StatefulWidget {
+  final int noteId;
+  const _SpeakerNames({required this.noteId});
+
+  @override
+  State<_SpeakerNames> createState() => _SpeakerNamesState();
+}
+
+class _SpeakerNamesState extends State<_SpeakerNames> {
+  final _controllers = <String, TextEditingController>{};
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.read<AppState>();
+    final note = state.byId(widget.noteId);
+    if (note == null) return const SizedBox.shrink();
+    final ids = note.speakerIds;
+    for (final id in ids) {
+      _controllers.putIfAbsent(
+          id, () => TextEditingController(text: note.speakerNames[id] ?? ''));
+    }
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24, 0, 24, MediaQuery.of(context).viewInsets.bottom + 16),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Name the speakers',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              'Tell the voices apart by listening to a few lines. Names appear '
+              'in the transcript, copies and subtitles.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            for (final id in ids) ...[
+              TextField(
+                controller: _controllers[id],
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: 'Name',
+                  hintText: note.speakerLabel(id),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            FilledButton(
+              onPressed: () async {
+                final nav = Navigator.of(context);
+                for (final id in ids) {
+                  await state.renameSpeaker(
+                      widget.noteId, id, _controllers[id]!.text);
+                }
+                nav.pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

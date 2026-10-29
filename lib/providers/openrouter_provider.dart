@@ -28,14 +28,19 @@ class OpenRouterProvider implements AiProvider {
   RecordingFormat get recordingFormat => RecordingFormat.m4a;
 
   @override
-  Future<Transcription> transcribe(File audio, {required bool translate}) =>
+  Future<Transcription> transcribe(File audio,
+          {required bool translate,
+          List<String> vocabulary = const [],
+          bool speakers = false}) =>
       throw const ProviderException(
           'OpenRouter cannot transcribe audio. Pick Sarvam, OpenAI or Gemini '
           'for transcription in Settings.');
 
   @override
-  Future<NoteSummary> summarize(String text) async =>
-      summaryFromReply(await completeJson('$summaryPrompt$text'));
+  Future<NoteSummary> summarize(String text,
+          {List<String> tags = const []}) async =>
+      summaryFromReply(await completeJson(summaryPrompt(text, tags: tags)),
+          allowed: tags);
 
   @override
   Future<String> completeJson(String prompt) async {

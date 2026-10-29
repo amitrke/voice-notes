@@ -14,6 +14,7 @@ import 'package:voice_notes/providers/ai_provider.dart';
 class FakeProvider implements AiProvider {
   final Map<String, Transcription> byFile;
   final transcribed = <String>[];
+  final vocabularies = <List<String>>[];
   final summarized = <String>[];
   final clinicalPrompts = <String>[];
 
@@ -25,16 +26,21 @@ class FakeProvider implements AiProvider {
   RecordingFormat get recordingFormat => RecordingFormat.m4a;
 
   @override
-  Future<Transcription> transcribe(File audio, {required bool translate}) async {
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false}) async {
     final name = p.basename(audio.path);
     transcribed.add(name);
+    vocabularies.add(vocabulary);
     final t = byFile[name];
     if (t == null) throw const ProviderException('boom');
     return t;
   }
 
   @override
-  Future<NoteSummary> summarize(String text) async {
+  Future<NoteSummary> summarize(String text,
+      {List<String> tags = const []}) async {
     summarized.add(text);
     return NoteSummary('Title ${summarized.length}', 'Summary of: $text');
   }
@@ -93,6 +99,26 @@ void main() {
   }
 
   group('migration', () {
+    test('tolerates a v1 database that already has the v2 clinical column',
+        () async {
+      final path = p.join(tmp.path, 'half.db');
+      final old = await ffi.openDatabase(path,
+          options: OpenDatabaseOptions(
+              version: 1, onCreate: (db, _) => db.execute(_v2Notes)));
+      await old.insert('notes', {
+        'provider': 'gemini',
+        'created_at': 1000,
+        'status': 'done',
+        'audio_path': '/a/one.m4a',
+      });
+      await old.close();
+
+      final db = await NotesDb.open(path: path, factory: ffi);
+      final notes = await db.all();
+      expect(notes.single.segments, hasLength(1));
+      await db.close();
+    });
+
     test('turns each existing note into a note with one recording', () async {
       final path = p.join(tmp.path, 'old.db');
       final old = await ffi.openDatabase(path,

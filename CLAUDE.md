@@ -9,8 +9,10 @@ locally. See README.md for the architecture and docs/RELEASING.md for the releas
 - `develop` is the test channel: **pushing to it ships a test build to Play internal testing and TestFlight.**
   Only push there when testers should get the build.
 - Work on a feature branch, open a pull request, merge. Do not push work-in-progress to `develop`.
-- A release is: merge `develop` into `main`, tag that commit `vX.Y.Z` (it must equal `pubspec.yaml`'s version),
-  push the tag, then bump `pubspec.yaml` on `develop`.
+- A release is: merge `develop` into `main`, run the "Promote to production" workflow from `main` with the
+  tested build number (it promotes that build on both stores and tags `vX.Y.Z`), then bump `pubspec.yaml` on
+  `develop`. Do not push release tags by hand: that uploads a new test build over the tested one.
+- Store listings and release notes live in `fastlane/metadata`; edit them there, not in the consoles.
 - The build number is `github.run_number + 100`, shared by both stores. Never rename or recreate
   `.github/workflows/release.yml`: that restarts the run number, which the stores reject.
 - Manual builds for sideloading: run the "Build" workflow (no secrets involved).
@@ -27,7 +29,8 @@ CI pins Flutter 3.47.0 (`FLUTTER_VERSION` in the workflows). Change it in all th
 ## Secrets
 
 Never commit `android/key.properties`, `*.jks`, `.p8` files or API keys. The upload keystore lives in
-`C:\Users\amitr\dev\keystores\voice-notes\`. CI gets keys only from GitHub secrets, and only `release.yml`.
+`C:\Users\amitr\dev\keystores\voice-notes\`. CI gets keys only from GitHub secrets, and only `release.yml` and `promote.yml`.
+The one Play key can release to production for every app on the account, so a leak is serious.
 
 ## Identifiers
 

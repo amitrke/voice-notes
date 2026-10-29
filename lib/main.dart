@@ -1,20 +1,34 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'data/app_state.dart';
 import 'data/notes_db.dart';
 import 'data/settings_store.dart';
+import 'services/share_intake.dart';
 import 'ui/home_page.dart';
+import 'ui/theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = SettingsStore();
   await settings.load();
+  await settings.models.load();
   final state = AppState(settings, await NotesDb.open());
   await state.init();
+  // Audio shared from other apps becomes a new note.
+  unawaited(ShareIntake(
+    onFile: (path) async => state.addAudio(await state.importFile(path)),
+  ).start());
   runApp(
-    ChangeNotifierProvider.value(value: state, child: const VoiceNotesApp()),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: state),
+        ChangeNotifierProvider.value(value: settings.models),
+      ],
+      child: const VoiceNotesApp(),
+    ),
   );
 }
 
@@ -39,35 +53,9 @@ class VoiceNotesApp extends StatelessWidget {
           child: child!,
         );
       },
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
       home: const HomePage(),
     );
   }
-}
-
-ThemeData _theme(Brightness brightness) {
-  final base = ThemeData(
-    colorSchemeSeed: Colors.indigo,
-    brightness: brightness,
-    useMaterial3: true,
-  );
-  // Material 3's letter spacing is tuned for Roboto and looks loose in
-  // Apple's system font.
-  if (defaultTargetPlatform != TargetPlatform.iOS) return base;
-  TextStyle? tight(TextStyle? s) => s?.copyWith(letterSpacing: 0);
-  final t = base.textTheme;
-  return base.copyWith(
-    textTheme: t.copyWith(
-      titleLarge: tight(t.titleLarge),
-      titleMedium: tight(t.titleMedium),
-      titleSmall: tight(t.titleSmall),
-      bodyLarge: tight(t.bodyLarge),
-      bodyMedium: tight(t.bodyMedium),
-      bodySmall: tight(t.bodySmall),
-      labelLarge: tight(t.labelLarge),
-      labelMedium: tight(t.labelMedium),
-      labelSmall: tight(t.labelSmall),
-    ),
-  );
 }

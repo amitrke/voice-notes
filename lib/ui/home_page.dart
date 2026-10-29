@@ -2,14 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
+import '../data/find_replace.dart';
 import '../models/note.dart';
+import '../providers/ai_provider.dart';
 import 'audio_input.dart';
+import 'folders.dart';
 import 'format.dart';
 import 'note_page.dart';
+import 'replace_page.dart';
 import 'settings_page.dart';
+import 'tags.dart';
+import 'theme.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
+
+  void _openSettings(BuildContext context) => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => const SettingsPage()),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -26,51 +37,83 @@ class HomePage extends StatelessWidget {
     }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Voice Notes'),
+        toolbarHeight: 64,
+        titleSpacing: 20,
+        title: Text(
+          'Notes',
+          style: Theme.of(context).textTheme.headlineMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
         actions: [
           IconButton(
             tooltip: 'Import audio',
-            icon: const Icon(Icons.upload_file),
+            icon: const Icon(Icons.file_upload_outlined),
             onPressed: () => importAudio(context),
           ),
+          if (state.hasAnyNotes)
+            IconButton(
+              tooltip: 'Find and replace',
+              icon: const Icon(Icons.find_replace),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => ReplacePage(initialFind: state.query)),
+              ),
+            ),
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SettingsPage())),
+            onPressed: () => _openSettings(context),
           ),
+          const SizedBox(width: 8),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => recordAudio(context),
-        icon: const Icon(Icons.mic),
-        label: const Text('Record'),
-      ),
+      bottomNavigationBar: const _RecordDock(),
       body: Column(
         children: [
-          if (!state.hasActiveKey) const _KeyBanner(),
+          if (!state.hasActiveKey)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: _KeyBanner(
+                  offline: state.settings.active == ProviderId.onDevice,
+                  onOpen: () => _openSettings(context)),
+            ),
           if (state.hasAnyNotes)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
               child: SearchBar(
                 hintText: 'Search notes',
                 leading: const Icon(Icons.search),
-                elevation: const WidgetStatePropertyAll(0),
                 onChanged: (v) => state.query = v,
               ),
             ),
+          if (state.hasAnyNotes) const _FolderBar(),
+          if (state.hasAnyNotes && state.approvedTags.isNotEmpty)
+            const _TagBar(),
           Expanded(
             child: notes.isEmpty
                 ? _Empty(searching: state.hasAnyNotes)
                 : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 96),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     itemCount: rows.length,
                     itemBuilder: (_, i) => switch (rows[i]) {
-                      final Note n => _NoteTile(
+                      final Note n => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _NoteCard(
                           note: n,
-                          showLanguage: languageLabel(n.languageCode) !=
-                              usualLanguage),
-                      final String day => _DayHeader(day),
+                          query: state.query,
+                          folderName: state.folderFilter == null
+                              ? state.folders
+                                  .where((f) => f.id == n.folderId)
+                                  .firstOrNull
+                                  ?.name
+                              : null,
+                          tags: [for (final t in state.tagsOf(n)) t.name],
+                          showLanguage:
+                              languageLabel(n.languageCode) != usualLanguage,
+                        ),
+                      ),
+                      final String day => SectionLabel(day),
                       _ => const SizedBox.shrink(),
                     },
                   ),
@@ -92,40 +135,104 @@ String? _usualLanguage(List<Note> notes) {
   return counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
 }
 
-class _DayHeader extends StatelessWidget {
-  final String text;
-  const _DayHeader(this.text);
+/// The big record button, docked at the bottom so it never covers a note.
+class _RecordDock extends StatelessWidget {
+  const _RecordDock();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(text,
-          style: theme.textTheme.labelLarge
-              ?.copyWith(color: theme.colorScheme.primary)),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          top: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton.filled(
+                tooltip: 'Record a note',
+                style: IconButton.styleFrom(
+                  fixedSize: const Size.square(72),
+                  backgroundColor: recordColor,
+                  foregroundColor: Colors.white,
+                  elevation: 2,
+                ),
+                onPressed: () => recordAudio(context),
+                icon: const Icon(Icons.mic_none_rounded, size: 32),
+              ),
+              const SizedBox(height: 6),
+              ExcludeSemantics(
+                child: Text(
+                  'Tap to record',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
 class _KeyBanner extends StatelessWidget {
-  const _KeyBanner();
+  final VoidCallback onOpen;
+
+  /// On-device transcription needs a model rather than a key.
+  final bool offline;
+  const _KeyBanner({required this.onOpen, this.offline = false});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return MaterialBanner(
-      backgroundColor: scheme.secondaryContainer,
-      content: const Text(
-          'Add an API key to transcribe your recordings. Your key stays on this device.'),
-      leading: const Icon(Icons.key),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const SettingsPage())),
-          child: const Text('Open settings'),
+    return Card(
+      color: scheme.primaryContainer,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.key_outlined, color: scheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    offline
+                        ? 'Download an offline model in Settings to start '
+                            'transcribing without internet.'
+                        : 'Add an API key to start transcribing. Your key stays on this device.',
+                    style: TextStyle(
+                      color: scheme.onPrimaryContainer,
+                      height: 1.4,
+                    ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      textStyle: Theme.of(context).textTheme.labelLarge
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    onPressed: onOpen,
+                    child: const Text('Open settings →'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -135,74 +242,295 @@ class _Empty extends StatelessWidget {
   const _Empty({required this.searching});
 
   @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Text(
-            searching
-                ? 'No notes match your search.'
-                : 'No notes yet.\nTap Record, or import an audio file.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              searching ? Icons.search_off : Icons.graphic_eq,
+              size: 48,
+              color: theme.colorScheme.outline,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              searching ? 'No notes match your search.' : 'No notes yet',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (!searching) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Tap record below, or import an audio file.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
-class _NoteTile extends StatelessWidget {
+/// Chips to narrow the list to one folder, with "+" to add a folder. Long
+/// press a folder to rename or delete it.
+class _FolderBar extends StatelessWidget {
+  const _FolderBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    Widget chip(String label, int? value, {Folder? folder}) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: GestureDetector(
+            onLongPress:
+                folder == null ? null : () => showFolderActions(context, folder),
+            child: ChoiceChip(
+              label: Text(label),
+              selected: state.folderFilter == value,
+              onSelected: (_) => state.folderFilter = value,
+            ),
+          ),
+        );
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        children: [
+          chip('All', null),
+          if (state.folders.isNotEmpty) ...[
+            chip('No folder', AppState.unfiled),
+            for (final f in state.folders) chip(f.name, f.id, folder: f),
+          ],
+          ActionChip(
+            avatar: const Icon(Icons.create_new_folder_outlined, size: 18),
+            label: Text(state.folders.isEmpty ? 'Add folder' : 'New'),
+            onPressed: () async {
+              final name = await askName(context,
+                  title: 'New folder', action: 'Create');
+              if (name != null) {
+                final f = await state.createFolder(name);
+                if (f != null) state.folderFilter = f.id;
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chips to narrow the list to notes with one tag. Tags are managed in
+/// Settings.
+class _TagBar extends StatelessWidget {
+  const _TagBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        children: [
+          for (final t in state.approvedTags)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                avatar: state.tagFilter == t.id
+                    ? null
+                    : const Icon(Icons.sell_outlined, size: 16),
+                label: Text(t.name),
+                selected: state.tagFilter == t.id,
+                onSelected: (on) => state.tagFilter = on ? t.id : null,
+              ),
+            ),
+          ActionChip(
+            avatar: const Icon(Icons.tune, size: 18),
+            label: const Text('Tags'),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const TagsPage())),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteCard extends StatelessWidget {
   final Note note;
   final bool showLanguage;
-  const _NoteTile({required this.note, required this.showLanguage});
+  final String query;
+  final String? folderName;
+  final List<String> tags;
+  const _NoteCard({
+    required this.note,
+    required this.showLanguage,
+    this.query = '',
+    this.folderName,
+    this.tags = const [],
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final lang = showLanguage ? languageLabel(note.languageCode) : null;
+    final failed = note.status == NoteStatus.failed;
     final title = switch (note.status) {
       NoteStatus.processing => 'Transcribing…',
       NoteStatus.failed => 'Transcription failed',
       NoteStatus.done => note.title.isEmpty ? 'Untitled note' : note.title,
     };
-    final body = note.status == NoteStatus.failed
+    // While searching, show the words around the match when it is in the
+    // transcript, so it is clear why the note is listed.
+    final body = failed
         ? (note.error ?? '')
-        : (note.summary.isNotEmpty
-            ? note.summary
-            : (note.english.isNotEmpty ? note.english : note.transcript));
-    return ListTile(
-      onTap: () => Navigator.push(
-          context, MaterialPageRoute(builder: (_) => NotePage(noteId: note.id!))),
-      // Status sits at the end so titles line up whether or not it shows.
-      trailing: switch (note.status) {
-        NoteStatus.processing => const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2.5)),
-        NoteStatus.failed => Icon(Icons.error_outline, color: scheme.error),
-        NoteStatus.done => null,
-      },
-      title: Text(title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w600)),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (body.isNotEmpty)
-            Text(body, maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 4),
-          Text(
-            [
-              formatTime(note.createdAt),
-              if (note.durationMs != null) formatDuration(note.durationMs!),
-              ?lang,
-            ].join(' · '),
-            style: theme.textTheme.bodySmall?.copyWith(color: scheme.outline),
+        : (matchSnippet(note, query) ??
+              (note.summary.isNotEmpty
+                  ? note.summary
+                  : (note.english.isNotEmpty ? note.english : note.transcript)));
+    final meta = [
+      formatTime(note.createdAt),
+      if (note.durationMs != null) formatDuration(note.durationMs!),
+      ?folderName,
+      ...tags.map((t) => '#$t'),
+    ].join(' · ');
+    final segments = note.segments;
+    final done = segments
+        .where((s) => s.status != NoteStatus.processing)
+        .length;
+    final metaStyle = theme.textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
+
+    return Card(
+      shape: failed
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: scheme.error.withValues(alpha: 0.35)),
+            )
+          : null,
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => NotePage(noteId: note.id!)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (failed) ...[
+                    Icon(Icons.error_outline, color: scheme.error, size: 22),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                  if (note.status == NoteStatus.processing &&
+                      segments.length > 1)
+                    Text(
+                      '$done of ${segments.length} parts',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+              if (body.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  body,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+                ),
+              ],
+              if (note.status == NoteStatus.processing) ...[
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    minHeight: 4,
+                    value: segments.length > 1 ? done / segments.length : null,
+                    backgroundColor: scheme.outlineVariant,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: metaStyle,
+                    ),
+                  ),
+                  if (lang != null) _LanguageBadge(lang),
+                  if (failed)
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 40),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      ),
+                      onPressed: () => context.read<AppState>().retry(note.id!),
+                      child: const Text('Retry'),
+                    ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-      isThreeLine: body.isNotEmpty,
+    );
+  }
+}
+
+class _LanguageBadge extends StatelessWidget {
+  final String text;
+  const _LanguageBadge(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        child: Text(
+          text,
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
     );
   }
 }

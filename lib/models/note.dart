@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import '../data/templates.dart';
 import '../providers/ai_provider.dart';
+import '../providers/voice_match.dart';
 
 enum NoteStatus { processing, done, failed }
 
@@ -17,6 +19,12 @@ class Segment {
   final String? error;
   final int? durationMs;
 
+  /// Timestamped text, when the provider gave it; empty otherwise.
+  final List<TimedLine> lines;
+
+  /// False once the audio was deleted after transcription; the text stays.
+  bool get hasAudio => audioPath.isNotEmpty;
+
   const Segment({
     this.id,
     this.noteId,
@@ -28,6 +36,7 @@ class Segment {
     this.status = NoteStatus.processing,
     this.error,
     this.durationMs,
+    this.lines = const [],
   });
 
   Segment copyWith({
@@ -40,18 +49,21 @@ class Segment {
     NoteStatus? status,
     String? error,
     bool clearError = false,
+    List<TimedLine>? lines,
+    String? audioPath,
   }) =>
       Segment(
         id: id ?? this.id,
         noteId: noteId ?? this.noteId,
         position: position ?? this.position,
-        audioPath: audioPath,
+        audioPath: audioPath ?? this.audioPath,
         transcript: transcript ?? this.transcript,
         english: english ?? this.english,
         languageCode: languageCode ?? this.languageCode,
         status: status ?? this.status,
         error: clearError ? null : (error ?? this.error),
         durationMs: durationMs,
+        lines: lines ?? this.lines,
       );
 
   Map<String, Object?> toMap() => {
@@ -65,6 +77,9 @@ class Segment {
         'status': status.name,
         'error': error,
         'duration_ms': durationMs,
+        'lines': lines.isEmpty
+            ? null
+            : jsonEncode([for (final l in lines) l.toJson()]),
       };
 
   factory Segment.fromMap(Map<String, Object?> m) => Segment(
@@ -81,7 +96,20 @@ class Segment {
         ),
         error: m['error'] as String?,
         durationMs: m['duration_ms'] as int?,
+        lines: _linesFrom(m['lines'] as String?),
       );
+
+  static List<TimedLine> _linesFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      return [
+        for (final j in jsonDecode(raw) as List)
+          TimedLine.fromJson(j as Map<String, dynamic>),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
 }
 
 /// Fingerprint of the text a title, summary or clinical note was generated
@@ -111,9 +139,26 @@ class Note {
   final String? error;
   final ClinicalReport? clinical;
 
+  /// What the note was turned into with templates other than clinical.
+  final List<TemplateOutput> outputs;
+
   /// [textHash] of the text the title/summary/clinical note were generated
   /// from; null if they never were.
   final String? enrichedHash;
+
+  /// The folder the note is filed in; null = not in any folder.
+  final int? folderId;
+
+  /// Names the user gave to speaker ids ("S1" -> "Dr. Rao").
+  final Map<String, String> speakerNames;
+
+  /// Ids of the note's tags, including a suggested tag that is still waiting
+  /// for approval (screens show only approved ones). Stored in `note_tags`.
+  final List<int> tagIds;
+
+  /// True once the user added or removed a tag by hand; from then on
+  /// enrichment leaves the note's tags alone.
+  final bool tagsEdited;
 
   const Note({
     this.id,
@@ -128,8 +173,32 @@ class Note {
     this.status = NoteStatus.processing,
     this.error,
     this.clinical,
+    this.outputs = const [],
     this.enrichedHash,
+    this.folderId,
+    this.speakerNames = const {},
+    this.tagIds = const [],
+    this.tagsEdited = false,
   });
+
+  /// Ids of the speakers heard in the note, in order of first appearance.
+  List<String> get speakerIds => {
+        for (final s in segments)
+          for (final l in s.lines)
+            if (l.speaker != null) l.speaker!,
+      }.toList();
+
+  /// What to call speaker [id]: the user's name for them, else "Speaker 1".
+  String speakerLabel(String id) {
+    final named = speakerNames[id]?.trim() ?? '';
+    if (named.isNotEmpty) return named;
+    if (id == youSpeakerId) return 'You';
+    final number = RegExp(r'\d+').firstMatch(id)?.group(0);
+    final index = number != null
+        ? int.parse(number)
+        : speakerIds.indexOf(id) + 1;
+    return 'Speaker $index';
+  }
 
   /// First recording's file (also kept in the legacy `audio_path` column).
   String get audioPath => segments.isEmpty ? '' : segments.first.audioPath;
@@ -139,7 +208,12 @@ class Note {
     return d.isEmpty ? null : d.fold<int>(0, (a, b) => a + b);
   }
 
-  bool get hasEnrichment => summary.isNotEmpty || clinical != null;
+  bool get hasEnrichment =>
+      summary.isNotEmpty || clinical != null || outputs.isNotEmpty;
+
+  /// What [templateId] made from this note, if anything.
+  TemplateOutput? output(String templateId) =>
+      outputs.where((o) => o.templateId == templateId).firstOrNull;
 
   /// True when the text changed after the summary/clinical note were made.
   bool get isStale =>
@@ -186,7 +260,13 @@ class Note {
     String? summary,
     String? provider,
     ClinicalReport? clinical,
+    List<TemplateOutput>? outputs,
     String? enrichedHash,
+    int? folderId,
+    bool clearFolder = false,
+    Map<String, String>? speakerNames,
+    List<int>? tagIds,
+    bool? tagsEdited,
   }) =>
       Note(
         id: id ?? this.id,
@@ -201,7 +281,12 @@ class Note {
         status: status,
         error: error,
         clinical: clinical ?? this.clinical,
+        outputs: outputs ?? this.outputs,
         enrichedHash: enrichedHash ?? this.enrichedHash,
+        folderId: clearFolder ? null : (folderId ?? this.folderId),
+        speakerNames: speakerNames ?? this.speakerNames,
+        tagIds: tagIds ?? this.tagIds,
+        tagsEdited: tagsEdited ?? this.tagsEdited,
       );
 
   /// Replaces [segments] and re-derives the joined text, language and status.
@@ -220,7 +305,12 @@ class Note {
       status: c.status,
       error: c.error,
       clinical: clinical,
+      outputs: outputs,
       enrichedHash: enrichedHash,
+      folderId: folderId,
+      speakerNames: speakerNames,
+      tagIds: tagIds,
+      tagsEdited: tagsEdited,
     );
   }
 
@@ -239,11 +329,17 @@ class Note {
         'status': status.name,
         'error': error,
         'clinical': clinical == null ? null : jsonEncode(clinical!.toJson()),
+        'outputs': outputs.isEmpty
+            ? null
+            : jsonEncode([for (final o in outputs) o.toJson()]),
         'enriched_hash': enrichedHash,
+        'folder_id': folderId,
+        'speakers': speakerNames.isEmpty ? null : jsonEncode(speakerNames),
+        'tags_edited': tagsEdited ? 1 : 0,
       };
 
   factory Note.fromMap(Map<String, Object?> m,
-          [List<Segment> segments = const []]) =>
+          [List<Segment> segments = const [], List<int> tagIds = const []]) =>
       Note(
         id: m['id'] as int?,
         title: (m['title'] as String?) ?? '',
@@ -260,8 +356,25 @@ class Note {
         ),
         error: m['error'] as String?,
         clinical: _clinicalFrom(m['clinical'] as String?),
+        outputs: TemplateOutput.listFrom(m['outputs'] as String?),
         enrichedHash: m['enriched_hash'] as String?,
+        folderId: m['folder_id'] as int?,
+        speakerNames: _namesFrom(m['speakers'] as String?),
+        tagIds: tagIds,
+        tagsEdited: (m['tags_edited'] as int?) == 1,
       );
+
+  static Map<String, String> _namesFrom(String? raw) {
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      return {
+        for (final e in (jsonDecode(raw) as Map).entries)
+          e.key.toString(): e.value.toString(),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
 
   static ClinicalReport? _clinicalFrom(String? raw) {
     if (raw == null || raw.isEmpty) return null;
@@ -271,4 +384,34 @@ class Note {
       return null;
     }
   }
+}
+
+/// A named place to file notes in.
+class Folder {
+  final int? id;
+  final String name;
+  const Folder({this.id, required this.name});
+
+  Map<String, Object?> toMap() => {if (id != null) 'id': id, 'name': name};
+
+  factory Folder.fromMap(Map<String, Object?> m) =>
+      Folder(id: m['id'] as int?, name: (m['name'] as String?) ?? '');
+}
+
+/// A label for notes. Tags the model suggests start unapproved and stay
+/// hidden until the user approves them in Settings.
+class Tag {
+  final int? id;
+  final String name;
+  final bool approved;
+  const Tag({this.id, required this.name, this.approved = true});
+
+  Map<String, Object?> toMap() =>
+      {if (id != null) 'id': id, 'name': name, 'approved': approved ? 1 : 0};
+
+  factory Tag.fromMap(Map<String, Object?> m) => Tag(
+        id: m['id'] as int?,
+        name: (m['name'] as String?) ?? '',
+        approved: (m['approved'] as int?) == 1,
+      );
 }

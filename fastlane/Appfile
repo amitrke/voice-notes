@@ -1,0 +1,7 @@
+# Android package and iOS bundle ID (permanent once published).
+package_name("com.subnext.voicenotes")
+app_identifier("com.subnext.voicenotes")
+team_id("BTSKP77HML")
+
+# Set by .github/workflows/promote.yml, which writes the key to a temporary file.
+json_key_file(ENV["PLAY_JSON_KEY_PATH"])

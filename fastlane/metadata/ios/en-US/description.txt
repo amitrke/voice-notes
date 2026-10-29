@@ -1,0 +1,31 @@
+Speak, and Basic Voice Notes does the rest. Record a note or import an audio file, and the app turns it into text in the language you spoke, an English translation, and a short title and summary, all saved in a searchable notes library.
+
+BRING YOUR OWN AI KEY
+Basic Voice Notes has no servers and no subscription. You add an API key from the AI provider you prefer, and the app talks to that provider directly from your iPhone. You pay the provider for what you use, at their rates. Choose between:
+• Sarvam, built for Indian languages
+• OpenAI
+• Google Gemini
+Switch provider at any time in Settings.
+
+WHAT YOU GET
+• Record in the app, or import m4a, mp3, wav and other audio files
+• Automatic transcript in the language that was spoken
+• Optional English translation shown next to the original
+• Automatic title and summary for every note
+• Search across all your notes
+• Play the original audio back from each note
+• Copy any transcript or translation
+• Retry a transcription if your connection drops. Your recording is saved first, so nothing is lost
+
+PRIVATE BY DESIGN
+• Notes and audio are stored on your device only
+• Your API key is kept in the iOS Keychain
+• No account, no ads, no analytics, no tracking
+• Audio is sent only to the provider you choose, and only when you transcribe a note
+
+GOOD TO KNOW
+• An API key and an internet connection are needed to transcribe
+• Language support and accuracy depend on the provider and model you pick
+• Provider usage may be billed by that provider
+
+A simple, no-frills tool for turning speech into searchable text, in the language you actually speak.

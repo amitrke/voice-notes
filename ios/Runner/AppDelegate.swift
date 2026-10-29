@@ -17,6 +17,22 @@ import UIKit
       let channel = FlutterMethodChannel(
         name: "com.subnext.voicenotes/audio", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
+        if call.method == "excludeFromBackup" {
+          // Offline models are large and can be downloaded again, so they
+          // should not take up the user's iCloud backup space.
+          guard let args = call.arguments as? [String: Any], let path = args["path"] as? String
+          else { return result(FlutterError(code: "args", message: "path is required", details: nil)) }
+          var url = URL(fileURLWithPath: path)
+          var values = URLResourceValues()
+          values.isExcludedFromBackup = true
+          do {
+            try url.setResourceValues(values)
+            result(nil)
+          } catch {
+            result(FlutterError(code: "backup", message: "\(error)", details: nil))
+          }
+          return
+        }
         guard call.method == "toWav16kMono" else { return result(FlutterMethodNotImplemented) }
         guard let args = call.arguments as? [String: Any],
           let src = args["src"] as? String, let dest = args["dest"] as? String
