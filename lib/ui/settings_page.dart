@@ -512,6 +512,23 @@ const _samplePassage =
 /// How long the voice sample records for.
 const _sampleLength = Duration(seconds: 20);
 
+/// Why the input [levels] heard during a voice sample don't sound like
+/// someone reading aloud, or null when they do. Reading has pauses between
+/// words and sentences; silence is quiet throughout, and steady noise
+/// (a fan, traffic, a broken microphone) never is.
+String? sampleVerdict(List<double> levels) {
+  if (levels.isEmpty) return 'Nothing was recorded. Try again.';
+  final quiet = levels.where((v) => v < quietLevel).length / levels.length;
+  if (quiet > 0.85) {
+    return 'That was too quiet. Hold the phone closer and read aloud.';
+  }
+  if (quiet < 0.05) {
+    return 'There was too much background noise to hear you clearly. Try '
+        'again somewhere quieter.';
+  }
+  return null;
+}
+
 /// Records a short sample of the owner's voice, so their lines in
 /// transcripts can be labelled "You".
 class _VoicePage extends StatefulWidget {
@@ -528,10 +545,15 @@ class _VoicePageState extends State<_VoicePage> {
   bool _recording = false;
   bool _working = false;
   String? _message;
+  StreamSubscription<double>? _levelSub;
+
+  /// Input levels heard during the sample, to tell reading from noise.
+  final _levels = <double>[];
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _levelSub?.cancel();
     _recorder.dispose();
     super.dispose();
   }
@@ -549,6 +571,8 @@ class _VoicePageState extends State<_VoicePage> {
     _clock
       ..reset()
       ..start();
+    _levels.clear();
+    _levelSub = _recorder.levels().listen(_levels.add);
     setState(() {
       _recording = true;
       _message = null;
@@ -564,6 +588,7 @@ class _VoicePageState extends State<_VoicePage> {
 
   Future<void> _finish(AppState state, String embedding) async {
     _ticker?.cancel();
+    await _levelSub?.cancel();
     _clock.stop();
     final sample = await _recorder.stop();
     setState(() {
@@ -572,9 +597,13 @@ class _VoicePageState extends State<_VoicePage> {
     });
     String message;
     try {
-      final print =
-          sample == null ? null : await voiceprintOf(sample.path, embedding);
-      if (print == null) {
+      final verdict = sampleVerdict(_levels);
+      final print = sample == null || verdict != null
+          ? null
+          : await voiceprintOf(sample.path, embedding);
+      if (verdict != null) {
+        message = verdict;
+      } else if (print == null) {
         message = 'That was too quiet to use. Try again somewhere quieter.';
       } else {
         await state.settings.setVoiceprint(print);

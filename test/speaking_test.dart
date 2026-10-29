@@ -3,6 +3,7 @@ import 'package:voice_notes/data/templates.dart';
 import 'package:voice_notes/models/note.dart';
 import 'package:voice_notes/providers/ai_provider.dart';
 import 'package:voice_notes/providers/voice_match.dart';
+import 'package:voice_notes/ui/settings_page.dart';
 
 Note _note(List<TimedLine> lines, {String transcript = ''}) => Note(
       provider: 'gemini',
@@ -75,6 +76,15 @@ void main() {
         'kind of': 1,
         'erm': 1,
       });
+    });
+  });
+
+  group('voice sample', () {
+    test('needs the pauses of someone reading', () {
+      expect(sampleVerdict([0.6, 0.7, 0.1, 0.5, 0.8, 0.2, 0.6, 0.7]), isNull);
+      expect(sampleVerdict(List.filled(50, 0.1)), contains('too quiet'));
+      expect(sampleVerdict(List.filled(50, 0.9)), contains('background noise'));
+      expect(sampleVerdict(const []), isNotNull);
     });
   });
 }
