@@ -168,6 +168,9 @@ jobs:
       ASC_KEY_ID: ${{ vars.APP_STORE_CONNECT_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ vars.APP_STORE_CONNECT_ISSUER_ID }}
       BUILD: ${{ inputs.build }}
+      # Optional: added to the App Review notes. A secret, so GitHub masks it
+      # in the log.
+      APP_REVIEW_GEMINI_KEY: ${{ secrets.APP_REVIEW_GEMINI_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83
@@ -211,12 +214,33 @@ jobs:
             --app_identifier com.subnext.voicenotes \
             --metadata_path "$live" \
             --force
+          # The repository is public, so this log and the summary are too. App
+          # Review details (notes that may hold a reviewer's key, the contact's
+          # phone number) and the trade representative's address are compared
+          # by file name only, never printed.
+          repo="$RUNNER_TEMP/repo-ios"
+          cp -R fastlane/metadata/ios "$repo"
+          private=(review_information trade_representative_contact_information)
+          {
+            echo '#### App Review details (file names only, contents not shown)'
+            echo '```'
+            for dir in "${private[@]}"; do
+              (cd "$repo" && find "$dir" -type f 2>/dev/null | sed 's/^/repository: /')
+              (cd "$live" && find "$dir" -type f -size +1c 2>/dev/null | sed 's/^/live: /')
+            done
+            echo '```'
+          } > "$RUNNER_TEMP/private-summary.md"
+          for dir in "${private[@]}"; do
+            rm -rf "${repo:?}/$dir" "${live:?}/$dir"
+          done
           {
             echo '### App Store: repository (a) against live (b)'
             echo '```diff'
-            git diff --no-index --ignore-space-at-eol fastlane/metadata/ios "$live" || true
+            git diff --no-index --ignore-space-at-eol "$repo" "$live" || true
             echo '```'
+            cat "$RUNNER_TEMP/private-summary.md"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -rf "$repo" "$RUNNER_TEMP/private-summary.md"
 
       - name: Remove the API key
         if: always()

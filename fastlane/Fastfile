@@ -6,6 +6,8 @@
 # (the same build number on both stores) to production, so what ships is what
 # was tested.
 
+require "tmpdir"
+
 opt_out_usage
 
 # Lane code runs inside fastlane/, actions run from the repository root.
@@ -40,6 +42,18 @@ def deliver_options
     force: true
   }
   options[:app_review_attachment_file] = REVIEW_ATTACHMENT if File.exist?(File.expand_path("../#{REVIEW_ATTACHMENT}", __dir__))
+  # A key for App Review to test with comes from a secret, never the public
+  # repository. It goes at the end of the notes in a temporary copy of the
+  # metadata: deliver prints its options (app_review_information included)
+  # before it reads the files, so a key passed as an option would be logged.
+  reviewer_key = ENV["APP_REVIEW_GEMINI_KEY"].to_s.strip
+  unless reviewer_key.empty?
+    copy = File.join(Dir.mktmpdir("metadata-ios"), "ios")
+    FileUtils.cp_r(File.expand_path("../#{IOS_METADATA}", __dir__), copy)
+    notes = File.join(copy, "review_information", "notes.txt")
+    File.write(notes, "#{File.read(notes).rstrip}\n\nFree-tier Gemini key for review: #{reviewer_key}\n")
+    options[:metadata_path] = copy
+  end
   options
 end
 
