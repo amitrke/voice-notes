@@ -4,7 +4,7 @@ name: Promote to production
 # testing track to production, and TestFlight to App Review (released
 # automatically once Apple approves it). Nothing is built, so what ships is the
 # binary that was tested. The store listings and release notes come from
-# fastlane/metadata. Setup (the "production" environment and its Play key) is in
+# fastlane/metadata. Setup (the "production" environment) is in
 # docs/RELEASING.md.
 #
 # Every job that talks to a store runs in the "production" environment, so a
@@ -118,13 +118,15 @@ jobs:
       # Written outside the checkout and removed at the end whatever happens.
       - name: Install the Play key
         env:
-          KEY: ${{ secrets.PLAY_PRODUCTION_SERVICE_ACCOUNT_JSON }}
+          # The same key release.yml uploads test builds with: its service
+          # account can also release to production and edit the listing.
+          KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::PLAY_PRODUCTION_SERVICE_ACCOUNT_JSON is not set in the production environment. See docs/RELEASING.md."
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON is not set. See docs/RELEASING.md."
             exit 1
           fi
-          key="$RUNNER_TEMP/play-production.json"
+          key="$RUNNER_TEMP/play.json"
           printf '%s' "$KEY" > "$key"
           chmod 600 "$key"
           echo "PLAY_JSON_KEY_PATH=$key" >> "$GITHUB_ENV"
@@ -153,7 +155,7 @@ jobs:
 
       - name: Remove the Play key
         if: always()
-        run: rm -f "$RUNNER_TEMP/play-production.json"
+        run: rm -f "$RUNNER_TEMP/play.json"
 
   ios:
     name: App Store

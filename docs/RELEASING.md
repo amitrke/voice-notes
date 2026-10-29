@@ -57,8 +57,10 @@ the files in a pull request like any other change.
   change only on a version being prepared, so `listing` creates or updates the version in pubspec without
   submitting it; promotional text, description, URLs and release notes can also change on the live version.
 - `check` downloads the live listings and prints how they differ from the repository (in the run's summary). It
-  changes nothing and can run from any branch. Run it before the first `release` or `listing`, and whenever
-  someone may have edited a listing in a console, since an upload overwrites the console's text.
+  changes nothing, but it still needs the store keys, so like the other actions it runs from `main` only and
+  waits for approval. It compares the listings on `main`, so merge listing edits there before checking them.
+  Run it before the first `release` or `listing`, and whenever someone may have edited a listing in a console,
+  since an upload overwrites the console's text.
 
 App Review notes are in `fastlane/metadata/ios/review_information/notes.txt`. Contact details are left out on
 purpose, so App Store Connect keeps the ones already there. Each upload removes the App Review attachment unless
@@ -107,9 +109,16 @@ means asking Google to reset the upload key.
 
 One service account serves every Android app on the Play developer account:
 `play-release@subnext-play-release.iam.gserviceaccount.com`, in its own Cloud project `subnext-play-release`
-(Google Play Android Developer API enabled, no Cloud roles). In Play Console it has the **account-level**
-permission "Release apps to testing tracks" only. That covers every app, including future ones, and cannot
-publish to production, edit store listings or manage testers.
+(Google Play Android Developer API enabled, no Cloud roles). In Play Console it has these **account-level**
+permissions, which cover every app, including future ones: "Release to production, exclude devices, and use
+Play App Signing", "Release apps to testing tracks", "Manage testing tracks and edit tester lists", "Manage
+store presence", "Manage policy declarations" and "Manage deep links" (checked 29 October 2026).
+
+So the same key uploads test builds (`release.yml`) and promotes them and edits the listing (`promote.yml`).
+It can also publish any app on the account to production, so treat a leaked key as serious and revoke it at
+once (below). What stops a test build reaching production by mistake is the workflows, not the key:
+`release.yml` only ever writes to the internal track, and `promote.yml` needs approval in the `production`
+environment.
 
 Give another app's repo its own key, so each can be revoked alone:
 
@@ -124,34 +133,23 @@ rm key.json
 Revoke one repo's key with `gcloud iam service-accounts keys list` then `keys delete <KEY_ID>` (the key ID is in the
 JSON's `private_key_id`). Keys must not be committed; delete the downloaded file as shown.
 
-### Production: the environment and its Play key
+### Production: the environment
 
 `promote.yml` runs every store job in a GitHub environment named `production`. Create it under Settings →
-Environments, add yourself as a required reviewer, and limit it to the `main` branch, so nothing reaches
-production without your approval.
+Environments, add yourself as a required reviewer (leave "Prevent self-review" off, since you start the runs
+too), and limit it to the `main` branch, so nothing reaches production without your approval. That limit is why
+every action, `check` included, runs from `main` only. (Done for this repo on 29 October 2026.)
 
-The test service account above cannot publish to production, and it should stay that way. Production uses a
-second service account in the same Cloud project, whose key is only in the `production` environment:
-
-```bash
-gcloud iam service-accounts create play-production   --display-name "Play production releases" --project subnext-play-release
-gcloud iam service-accounts keys create key.json   --iam-account=play-production@subnext-play-release.iam.gserviceaccount.com   --project subnext-play-release
-gh secret set PLAY_PRODUCTION_SERVICE_ACCOUNT_JSON --env production -R amitrke/voice-notes < key.json
-rm key.json
-```
-
-In Play Console, Users and permissions, invite `play-production@subnext-play-release.iam.gserviceaccount.com`
-for this app only, with "Release to production, exclude devices, and use Play App Signing", "Release apps to
-testing tracks" (promotion reads the internal track) and "Manage store presence" (the listing).
-
-The App Store side reuses `APP_STORE_CONNECT_API_KEY_P8`: its Admin role can already submit for review.
+No extra keys are needed. Play reuses `PLAY_SERVICE_ACCOUNT_JSON`, whose service account already has production
+and store-listing permissions (above). The App Store side reuses `APP_STORE_CONNECT_API_KEY_P8`, whose Admin
+role can already submit for review.
 
 ### Android: the first bundle goes up by hand
 
 Play's API cannot create an app's first release. Upload `app-release.aab` once in Play Console
 (Internal testing → Create new release). The workflow also keeps every bundle it builds as an artifact.
-After that, CI uploads automatically. Invite the service account under Users and permissions with only
-"Release apps to testing tracks" for this app.
+After that, CI uploads automatically. The service account needs no invitation per app: its account-level
+permissions (above) already cover new apps.
 
 ### iOS: cloud-managed signing
 
