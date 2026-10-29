@@ -90,6 +90,10 @@ with its `platforms` input. Unset means on.
 
 - **Promote to production** (manual): see "To release" and "Store listings" above.
 - **Build** (manual): analyse, test and make sideloadable APKs. Needs no secrets.
+- **Dependabot** (`.github/dependabot.yml`): one grouped pull request a week each for pub, GitHub Actions and
+  Bundler, into `develop`. Merging one ships a test build like any other merge.
+- **CodeQL** (GitHub's default setup, configured in Settings → Code security): scans the workflows, Kotlin,
+  Ruby and Python. Dart is not supported, so `flutter analyze` remains the app's main check.
 - **Publish site to GitHub Pages**: publishes `site/` (privacy policy and support page) when it changes on `main`.
 
 ## One-time setup

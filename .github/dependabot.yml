@@ -1,0 +1,36 @@
+# Weekly dependency updates, one grouped pull request per ecosystem.
+#
+# Pull requests target develop, like any other change, so merging one ships a
+# test build; grouping keeps that to one build per ecosystem a week. Dependabot
+# reads this file from the default branch (main), so it takes effect once it
+# reaches main. Gradle is left out: the Android build tools have to match what
+# Flutter supports, and Flutter upgrades move them.
+version: 2
+updates:
+  - package-ecosystem: pub
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      pub:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # fastlane, used by promote.yml.
+  - package-ecosystem: bundler
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      bundler:
+        patterns: ["*"]
