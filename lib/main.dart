@@ -15,7 +15,8 @@ Future<void> main() async {
   final settings = SettingsStore();
   await settings.load();
   await settings.models.load();
-  final state = AppState(settings, await NotesDb.open());
+  final state = AppState(
+      settings, await NotesDb.open(audioRoot: (await audioDir()).path));
   await state.init();
   // Audio shared from other apps becomes a new note.
   unawaited(ShareIntake(

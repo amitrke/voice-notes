@@ -46,13 +46,54 @@ const starterTags = ['Grocery', 'To-do', 'Work', 'Health', 'Ideas'];
 
 class NotesDb {
   final Database _db;
-  NotesDb._(this._db);
+
+  /// The folder recordings are kept in. Paths inside it are stored relative
+  /// to it, because its absolute path is not stable: on iPhone it changes
+  /// when the app moves to a new phone and can change on an update. Null
+  /// (tests) stores paths as they are.
+  final String? audioRoot;
+  NotesDb._(this._db, this.audioRoot);
+
+  /// [path] as stored: relative when it is inside [audioRoot].
+  String _stored(String path) {
+    final root = audioRoot;
+    if (root == null || path.isEmpty || !p.isWithin(root, path)) return path;
+    return p.relative(path, from: root);
+  }
+
+  /// A stored path as the absolute path the rest of the app uses.
+  String _resolved(String stored) {
+    final root = audioRoot;
+    if (root == null || stored.isEmpty || p.isAbsolute(stored)) return stored;
+    return p.join(root, stored);
+  }
+
+  Map<String, Object?> _out(Map<String, Object?> row) =>
+      {...row, 'audio_path': _stored((row['audio_path'] as String?) ?? '')};
+
+  Segment _segment(Map<String, Object?> row) => Segment.fromMap(
+      {...row, 'audio_path': _resolved((row['audio_path'] as String?) ?? '')});
+
+  /// Rewrites absolute paths saved by earlier versions as relative ones.
+  Future<void> _relativiseAudioPaths() async {
+    if (audioRoot == null) return;
+    final rows = await _db.query('segments',
+        columns: ['id', 'audio_path'], where: "audio_path != ''");
+    for (final r in rows) {
+      final path = r['audio_path'] as String;
+      final stored = _stored(path);
+      if (stored == path) continue;
+      await _db.update('segments', {'audio_path': stored},
+          where: 'id = ?', whereArgs: [r['id']]);
+    }
+  }
 
   static const version = 7;
 
   /// Opens the database at [path] (default: the app's databases folder).
-  /// [factory] lets tests use sqflite_common_ffi.
-  static Future<NotesDb> open({String? path, DatabaseFactory? factory}) async {
+  /// [factory] lets tests use sqflite_common_ffi. See [audioRoot].
+  static Future<NotesDb> open(
+      {String? path, DatabaseFactory? factory, String? audioRoot}) async {
     final f = factory ?? databaseFactory;
     final db = await f.openDatabase(
       path ?? p.join(await getDatabasesPath(), 'voice_notes.db'),
@@ -102,7 +143,9 @@ class NotesDb {
         },
       ),
     );
-    return NotesDb._(db);
+    final notes = NotesDb._(db, audioRoot);
+    await notes._relativiseAudioPaths();
+    return notes;
   }
 
   /// Adds a column (TEXT unless [type] says otherwise) unless a half-migrated database already has it.
@@ -156,7 +199,7 @@ class NotesDb {
     final rows = await _db.query('notes', orderBy: 'created_at DESC');
     final segs = await _db.query('segments', orderBy: 'note_id, position');
     final byNote = <int, List<Segment>>{};
-    for (final s in segs.map(Segment.fromMap)) {
+    for (final s in segs.map(_segment)) {
       byNote.putIfAbsent(s.noteId!, () => []).add(s);
     }
     final links = await _db.query('note_tags', orderBy: 'note_id, tag_id');
@@ -173,11 +216,11 @@ class NotesDb {
   /// Inserts [n] and its segments; returns them with ids.
   Future<Note> insert(Note n) {
     return _db.transaction((txn) async {
-      final id = await txn.insert('notes', n.toMap());
+      final id = await txn.insert('notes', _out(n.toMap()));
       final segs = <Segment>[];
       for (final s in n.segments) {
         final withNote = s.copyWith(noteId: id);
-        final segId = await txn.insert('segments', withNote.toMap());
+        final segId = await txn.insert('segments', _out(withNote.toMap()));
         segs.add(withNote.copyWith(id: segId));
       }
       return n.copyWith(id: id).withSegments(segs);
@@ -186,14 +229,15 @@ class NotesDb {
 
   /// Writes the note row only; segments are saved with [saveSegment].
   Future<void> update(Note n) =>
-      _db.update('notes', n.toMap(), where: 'id = ?', whereArgs: [n.id]);
+      _db.update('notes', _out(n.toMap()), where: 'id = ?', whereArgs: [n.id]);
 
   /// Inserts the segment when it has no id yet; returns it with its id.
   Future<Segment> saveSegment(Segment s) async {
     if (s.id == null) {
-      return s.copyWith(id: await _db.insert('segments', s.toMap()));
+      return s.copyWith(id: await _db.insert('segments', _out(s.toMap())));
     }
-    await _db.update('segments', s.toMap(), where: 'id = ?', whereArgs: [s.id]);
+    await _db.update('segments', _out(s.toMap()),
+        where: 'id = ?', whereArgs: [s.id]);
     return s;
   }
 

@@ -42,6 +42,7 @@ class _RecordScreenState extends State<RecordScreen> {
   String? _error;
   bool _recording = false;
   bool _splitting = false;
+  bool _stopping = false;
 
   /// The note the parts go to; set once the first part is saved.
   late int? _noteId = widget.noteId;
@@ -100,10 +101,26 @@ class _RecordScreenState extends State<RecordScreen> {
     if (!shouldSplit(DateTime.now().difference(started), _quiet.elapsed)) {
       return;
     }
+    unawaited(_split());
+  }
+
+  Future<void> _split() async {
     _splitting = true;
-    _recorder.split().then((part) async {
+    var interrupted = false;
+    try {
+      final part = await _recorder.split();
       if (part != null) await _addPart(part);
-    }).whenComplete(() => _splitting = false);
+    } on RecordingInterrupted catch (e) {
+      interrupted = true;
+      if (e.saved != null) await _addPart(e.saved!);
+    } catch (_) {
+      interrupted = true;
+    } finally {
+      _splitting = false;
+    }
+    // Nothing is being recorded any more: save what there is and say so,
+    // rather than leave the clock running over silence.
+    if (interrupted && mounted) await _stop(interrupted: true);
   }
 
   /// Saves a finished part; it is transcribed in the background.
@@ -127,16 +144,31 @@ class _RecordScreenState extends State<RecordScreen> {
     }
   }
 
-  Future<void> _stop() async {
+  Future<void> _stop({bool interrupted = false}) async {
+    if (_stopping) return;
+    _stopping = true;
     _ticker?.cancel();
+    _clock.stop();
     await _levelSub?.cancel();
     while (_splitting) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
-    final part = await _recorder.stop();
+    RecordingResult? part;
+    try {
+      part = await _recorder.stop();
+    } catch (_) {
+      // Already stopped; the parts saved so far are what there is.
+    }
     await keepRecordingInBackground(false);
     if (part != null) await _addPart(part);
     final id = _noteId;
+    if (interrupted && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(id == null
+              ? 'Recording stopped unexpectedly. Nothing was saved.'
+              : 'Recording stopped unexpectedly. What was recorded until '
+                  'then is saved.')));
+    }
     // Waits for the last parts and then writes the summary; no need to hold
     // the screen open for it.
     if (id != null) unawaited(_state.endLive(id));
