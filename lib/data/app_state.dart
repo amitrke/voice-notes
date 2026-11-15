@@ -8,6 +8,7 @@ import '../providers/ai_provider.dart';
 import '../providers/voice_match.dart';
 import '../services/audio_converter.dart';
 import '../ui/format.dart';
+import 'ask.dart';
 import 'dictionary.dart';
 import 'find_replace.dart';
 import 'notes_db.dart';
@@ -877,6 +878,47 @@ class AppState extends ChangeNotifier {
       return null;
     } catch (e) {
       return _describe(e);
+    }
+  }
+
+  /// The notes a question may read: those of [scope], or just [noteId].
+  List<Note> notesToAsk({AskScope scope = const AskScope(), int? noteId}) {
+    if (noteId != null) {
+      final n = byId(noteId);
+      return n == null ? const [] : [n];
+    }
+    final now = DateTime.now();
+    return [
+      for (final n in _notes)
+        if (scope.matches(n, now)) n,
+    ];
+  }
+
+  /// Why questions cannot be asked yet, or null when they can: asking needs a
+  /// text model with its key.
+  String? get askBlocker => settings.textActive.canText &&
+          settings.isReady(settings.textActive)
+      ? null
+      : _noTextProvider;
+
+  /// Answers [question] from [candidates], after the earlier [history].
+  /// Returns the answer or an error message.
+  Future<({AskAnswer? answer, String? error})> ask(
+      String question, List<Note> candidates,
+      {List<AskTurn> history = const []}) async {
+    final blocker = askBlocker;
+    final provider = settings.build(settings.textActive);
+    if (blocker != null || provider == null) {
+      return (answer: null, error: blocker ?? _noTextProvider);
+    }
+    try {
+      return (
+        answer: await askNotes(provider, question, candidates,
+            history: history),
+        error: null
+      );
+    } catch (e) {
+      return (answer: null, error: _describe(e));
     }
   }
 
