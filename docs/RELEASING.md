@@ -49,10 +49,12 @@ succeeded, and a re-run accepts its own tag.
 ### Store listings
 
 The listing text for both stores lives in `fastlane/metadata`, one file per field, with `android/` (Play, "Voice
-Notes") and `ios/` (App Store, "Basic Voice Notes"). Screenshots and images are not managed there yet. Edit
+Notes") and `ios/` (App Store, "Basic Voice Notes"). Play screenshots live in `android/en-US/images/phoneScreenshots` and `tenInchScreenshots`; the icon and feature graphic and the App Store screenshots are not managed there yet. Edit
 the files in a pull request like any other change.
 
 - `release` uploads the listings with each release.
+- `screenshots` uploads the Play screenshots alone (Play only; `release` and `listing` leave them untouched).
+  Play replaces its whole set with what is in the repository, so add new ones here, not in the console.
 - `listing` uploads them alone. On Play they go live once Google accepts them. On the App Store most fields can
   change only on a version being prepared, so `listing` creates or updates the version in pubspec without
   submitting it; promotional text, description, URLs and release notes can also change on the live version.

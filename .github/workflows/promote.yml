@@ -15,10 +15,11 @@ on:
       action:
         description: >-
           "release" promotes a build and tags the release. "listing" uploads
-          the store listings only. "check" shows how the live listings differ
+          the store listings only. "screenshots" uploads the Google Play
+          screenshots only. "check" shows how the live listings differ
           from fastlane/metadata and changes nothing.
         type: choice
-        options: [release, listing, check]
+        options: [release, listing, screenshots, check]
         default: release
       build:
         description: >-
@@ -139,12 +140,16 @@ jobs:
         if: inputs.action == 'listing'
         run: bundle exec fastlane android listing
 
+      - name: Upload the screenshots
+        if: inputs.action == 'screenshots'
+        run: bundle exec fastlane android screenshots
+
       - name: Compare with the live listing
         if: inputs.action == 'check'
         run: |
           live="$RUNNER_TEMP/live-android"
           bundle exec fastlane android fetch_listing path:"$live"
-          # Images are not managed here.
+          # Screenshots are compared by eye in the console, not here.
           find "$live" -type d -name images -prune -exec rm -rf {} +
           {
             echo '### Google Play: repository (a) against live (b)'
@@ -160,7 +165,7 @@ jobs:
   ios:
     name: App Store
     needs: check
-    if: inputs.platforms != 'android'
+    if: inputs.platforms != 'android' && inputs.action != 'screenshots'
     # deliver uploads no binary here, so it needs no Xcode.
     runs-on: ubuntu-latest
     environment: production

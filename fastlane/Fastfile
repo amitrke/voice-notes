@@ -89,6 +89,20 @@ platform :android do
     )
   end
 
+  desc "Upload the Play screenshots only (fastlane/metadata/android/en-US/images)"
+  desc "They replace the whole set on Play, so the repository is the source of truth"
+  lane :screenshots do
+    upload_to_play_store(
+      metadata_path: PLAY_METADATA,
+      skip_upload_apk: true,
+      skip_upload_aab: true,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: false
+    )
+  end
+
   desc "Download the live listing into path:<dir>, to compare with the repository"
   lane :fetch_listing do |options|
     download_from_play_store(metadata_path: options[:path] || UI.user_error!("Pass path:<dir>"))
