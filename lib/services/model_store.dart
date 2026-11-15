@@ -132,9 +132,8 @@ final offlineModels = <OfflineModel>[
   OfflineModel(
     id: 'omnilingual',
     label: 'Many languages (Omnilingual)',
-    blurb: 'Meta model for 1,600+ languages, including Hindi, Tamil, '
-        'Telugu, Bengali and more. Transcribes only; it does not translate '
-        'or name the language.',
+    blurb: '1,600+ languages, including Hindi, Tamil, Telugu and Bengali. '
+        'Transcribes only; does not translate.',
     kind: ModelKind.omnilingual,
     encoder: ModelFile(
       'omnilingual-model.int8.onnx',
@@ -185,9 +184,9 @@ OfflineModel _indic(String code, String name, String commit, String modelSha,
         String converter = 'a community contributor'}) =>
     OfflineModel(
       id: 'indic-$code',
-      label: '$name only (IndicConformer)',
-      blurb: 'Made for $name only, so it cannot detect other languages or '
-          'translate. AI4Bharat model, converted by $converter.',
+      label: '$name only',
+      blurb: 'Made for $name only; no translation. AI4Bharat model, '
+          'converted by $converter.',
       kind: ModelKind.nemoCtc,
       language: code,
       encoder: ModelFile(
