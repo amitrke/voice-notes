@@ -72,6 +72,18 @@ void main() {
       expect(again.isInstalled('tiny'), isTrue);
     });
 
+    test('removes the folder of a model that is no longer offered', () async {
+      final old = Directory(p.join(tmp.path, 'models', 'omnilingual'))
+        ..createSync(recursive: true);
+      File(p.join(old.path, 'model.onnx')).writeAsStringSync('old');
+      final speakers = Directory(p.join(tmp.path, 'models', 'speakers'))
+        ..createSync(recursive: true);
+      final s = store(MockClient((_) async => http.Response('', 500)));
+      await s.load();
+      expect(old.existsSync(), isFalse);
+      expect(speakers.existsSync(), isTrue);
+    });
+
     test('a damaged file is removed and the model is not installed', () async {
       final s = store(MockClient((req) async {
         final name = req.url.pathSegments.last;
