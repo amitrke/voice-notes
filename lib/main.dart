@@ -18,7 +18,7 @@ Future<void> main() async {
     settings = SettingsStore();
     await settings.load();
     await settings.models.load();
-    state = AppState(settings, await NotesDb.open());
+    state = AppState(settings, await NotesDb.open(audioRoot: (await audioDir()).path));
     await state.init();
   } catch (e) {
     // Without this the app would sit on its launch screen for ever.

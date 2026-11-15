@@ -42,6 +42,7 @@ class _RecordScreenState extends State<RecordScreen> {
   String? _error;
   bool _recording = false;
   bool _splitting = false;
+  bool _stopping = false;
 
   /// Stop or Cancel is under way; further taps do nothing.
   bool _closing = false;
@@ -115,16 +116,26 @@ class _RecordScreenState extends State<RecordScreen> {
     if (!shouldSplit(DateTime.now().difference(started), _quiet.elapsed)) {
       return;
     }
+    unawaited(_split());
+  }
+
+  Future<void> _split() async {
     _splitting = true;
-    _recorder.split().then((r) async {
-      if (r.part != null) await _addPart(r.part!);
-      return r.error;
-    }).catchError((Object e) => e).then((error) {
+    var interrupted = false;
+    try {
+      final part = await _recorder.split();
+      if (part != null) await _addPart(part);
+    } on RecordingInterrupted catch (e) {
+      interrupted = true;
+      if (e.saved != null) await _addPart(e.saved!);
+    } catch (_) {
+      interrupted = true;
+    } finally {
       _splitting = false;
-      // The next part could not start, so nothing is being recorded. Save
-      // what there is rather than show a recording that isn't one.
-      if (error != null && mounted) _stop(interrupted: true);
-    });
+    }
+    // Nothing is being recorded any more: save what there is and say so,
+    // rather than leave the clock running over silence.
+    if (interrupted && mounted) await _stop(interrupted: true);
   }
 
   /// Saves a finished part; it is transcribed in the background.
@@ -149,10 +160,11 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   Future<void> _stop({bool interrupted = false}) async {
-    if (_closing) return;
+    if (_stopping) return;
+    _stopping = true;
     _closing = true;
-    final messenger = ScaffoldMessenger.of(context);
     _ticker?.cancel();
+    _clock.stop();
     await _levelSub?.cancel();
     while (_splitting) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -161,18 +173,18 @@ class _RecordScreenState extends State<RecordScreen> {
     try {
       part = await _recorder.stop();
     } catch (_) {
-      // Nothing more to save; what was recorded before is already kept.
+      // Already stopped; the parts saved so far are what there is.
     }
     await keepRecordingInBackground(false);
     if (part != null) await _addPart(part);
-    if (interrupted) {
-      messenger.showSnackBar(SnackBar(
-          content: Text(_noteId == null
-              ? 'Recording stopped: the microphone became unavailable.'
-              : 'Recording stopped: the microphone became unavailable. '
-                  'What was recorded is saved.')));
-    }
     final id = _noteId;
+    if (interrupted && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(id == null
+              ? 'Recording stopped unexpectedly. Nothing was saved.'
+              : 'Recording stopped unexpectedly. What was recorded until '
+                  'then is saved.')));
+    }
     // Waits for the last parts and then writes the summary; no need to hold
     // the screen open for it.
     if (id != null) unawaited(_state.endLive(id));

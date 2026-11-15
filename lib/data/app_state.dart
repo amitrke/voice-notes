@@ -184,24 +184,15 @@ class AppState extends ChangeNotifier {
       }
       await _save(n.withSegments(segs));
     }
-    // The folder recordings live in can move: iOS may give the app a new
-    // container path after an update. A recording that is not where the
-    // database says is looked for by name in today's folder first.
-    // Notes restored onto a new phone by its own backup come without their
-    // recordings; keep the text, as if the audio had been deleted.
-    String? folder;
+    // A recording saved under an absolute path by an earlier version may
+    // still be in the recordings folder, which has moved (an iPhone restore
+    // or update); find it there by name. Otherwise the note came from a
+    // backup without its recordings: keep the text, as if the audio had been
+    // deleted.
+    final root = db.audioRoot;
     for (final n in _notes.toList()) {
       if (!n.segments.any((s) => s.hasAudio && !File(s.audioPath).existsSync())) {
         continue;
-      }
-      if (folder == null) {
-        try {
-          folder = (await _audioDir()).path;
-        } catch (_) {
-          // Without the folder there is no telling moved from missing, so
-          // leave the paths alone rather than forget recordings.
-          return;
-        }
       }
       final segs = <Segment>[];
       for (final s in n.segments) {
@@ -209,16 +200,17 @@ class AppState extends ChangeNotifier {
           segs.add(s);
           continue;
         }
-        final moved = p.join(folder, _fileName(s.audioPath));
-        segs.add(await db.saveSegment(
-            s.copyWith(audioPath: File(moved).existsSync() ? moved : '')));
+        final moved =
+            root == null ? null : p.join(root, p.basename(s.audioPath));
+        segs.add(await db.saveSegment(s.copyWith(
+            audioPath:
+                moved != null && File(moved).existsSync() ? moved : '')));
       }
       await _save(n.withSegments(segs));
     }
   }
 
   /// The last part of a stored path, whichever platform wrote it.
-  static String _fileName(String path) => path.split(RegExp(r'[/\\]')).last;
 
   Future<void> _save(Note n) async {
     final i = _notes.indexWhere((e) => e.id == n.id);
@@ -555,6 +547,7 @@ class AppState extends ChangeNotifier {
               error: providerId.needsKey
                   ? 'Add your ${providerId.label} API key in Settings, then retry.'
                   : 'Download an offline model in Settings, then retry.'));
+      await _afterTranscription(noteId);
       return;
     }
     final path =
@@ -596,19 +589,10 @@ class AppState extends ChangeNotifier {
         await _discardAudio(noteId, segId, path);
       }
     } catch (e) {
+      // The parts that did work still get their title and summary below; if
+      // this one finished last, nothing else would write them.
       await _editSegment(noteId, segId,
           (s) => s.copyWith(status: NoteStatus.failed, error: _describe(e)));
-      // If this was the last part still pending, the parts that did work
-      // must not wait for a retry to get their title and summary.
-      final n = byId(noteId);
-      if (n != null && n.status != NoteStatus.processing) {
-        if (n.transcript.trim().isNotEmpty) {
-          await _afterTranscription(noteId);
-        } else if (_live[noteId]?.ended ?? false) {
-          _live.remove(noteId);
-        }
-      }
-      return;
     }
     await _updateLiveNotes(noteId);
     await _afterTranscription(noteId);
@@ -763,8 +747,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _afterTranscription(int noteId) async {
     final n = byId(noteId);
-    // Wait until the last pending recording has finished.
-    if (n == null || n.status == NoteStatus.processing) return;
+    // Wait until the last pending recording has finished. When every one
+    // failed there is no text to sum up; a retry comes back here.
+    if (n == null || n.status != NoteStatus.done) return;
     final live = _live[noteId];
     // Still recording: more is coming, so it is too early to sum up. A
     // stand-in title keeps the note recognisable in the list meanwhile.

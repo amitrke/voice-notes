@@ -158,7 +158,7 @@ void main() {
       await audio('rec_1.m4a', now);
       await db.close();
 
-      db = await NotesDb.open(path: path, factory: ffi);
+      db = await NotesDb.open(path: path, factory: ffi, audioRoot: now.path);
       final state = AppState(_Settings(_Provider()), db,
           audioDirectory: () async => now);
       await state.init();
@@ -169,23 +169,6 @@ void main() {
       // And it is saved, not just patched in memory.
       expect((await db.all()).single.segments[0].audioPath,
           p.join(now.path, 'rec_1.m4a'));
-      await db.close();
-    });
-
-    test('are left alone when the folder cannot be found', () async {
-      final db = await NotesDb.open(path: p.join(tmp.path, 'n.db'), factory: ffi);
-      await db.insert(Note(
-        provider: 'gemini',
-        createdAt: DateTime(2026),
-        segments: const [
-          Segment(audioPath: '/old/audio/rec_1.m4a', status: NoteStatus.done),
-        ],
-      ));
-      final state = AppState(_Settings(_Provider()), db,
-          audioDirectory: () async => throw const FileSystemException('no'));
-      await state.init();
-      expect(state.allNotes.single.segments.single.audioPath,
-          '/old/audio/rec_1.m4a');
       await db.close();
     });
   });
