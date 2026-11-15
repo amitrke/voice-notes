@@ -1050,10 +1050,20 @@ Future<void> _downloadModel(BuildContext context, SettingsStore store,
 }
 
 /// Downloads, picks and deletes the models used offline.
-class _OfflineModels extends StatelessWidget {
+class _OfflineModels extends StatefulWidget {
   final SettingsStore store;
   final VoidCallback onChanged;
   const _OfflineModels({required this.store, required this.onChanged});
+
+  @override
+  State<_OfflineModels> createState() => _OfflineModelsState();
+}
+
+class _OfflineModelsState extends State<_OfflineModels> {
+  /// The model shown below the menu; the one in use until another is picked.
+  String? _viewing;
+
+  SettingsStore get store => widget.store;
 
   Future<void> _delete(
       BuildContext context, ModelStore models, OfflineModel m) async {
@@ -1075,7 +1085,7 @@ class _OfflineModels extends StatelessWidget {
     );
     if (ok != true) return;
     await models.delete(m.id);
-    onChanged();
+    widget.onChanged();
   }
 
   @override
@@ -1085,6 +1095,10 @@ class _OfflineModels extends StatelessWidget {
     final muted = theme.textTheme.bodySmall
         ?.copyWith(color: theme.colorScheme.onSurfaceVariant, height: 1.4);
     final selected = store.offlineModel;
+    final catalog = models.catalog;
+    final shown = catalog.firstWhere(
+        (m) => m.id == (_viewing ?? models.downloading ?? selected),
+        orElse: () => catalog.first);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
@@ -1093,31 +1107,47 @@ class _OfflineModels extends StatelessWidget {
           Text('Offline model', style: theme.textTheme.titleSmall),
           const SizedBox(height: 4),
           Text(
-            'Download a model once. After that, transcription works without '
-            'internet and audio stays on your phone. Wi-Fi is recommended. '
-            'Larger models are more accurate but slower. For Indian languages, '
-            'the models below the Whisper ones may do better than Whisper, '
-            'but Sarvam is still the one built for them.',
+            'Download once, then transcribe without internet. Wi-Fi '
+            'recommended. Sarvam is still the best for Indian languages.',
             style: muted,
           ),
-          const SizedBox(height: 8),
-          for (final m in models.catalog.where((m) => m.kind == ModelKind.whisper))
-            _modelRow(context, models, m, selected),
-          Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 2),
-            child: Text('Indian languages',
-                style: theme.textTheme.labelLarge
-                    ?.copyWith(color: theme.colorScheme.primary)),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            // Keyed so the menu follows [shown] when it changes.
+            key: ValueKey(shown.id),
+            initialValue: shown.id,
+            isExpanded: true,
+            decoration: const InputDecoration(
+                labelText: 'Model', border: OutlineInputBorder()),
+            items: [
+              for (final m in catalog)
+                DropdownMenuItem(
+                  value: m.id,
+                  child: Text(
+                    '${m.label}${m.id == selected ? ' (in use)' : models.isInstalled(m.id) ? ' (downloaded)' : ''}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (v) => setState(() => _viewing = v),
           ),
-          Text(
-            'Each model below listens in one way: the language-specific ones '
-            'transcribe only their language, and Omnilingual covers many '
-            'without naming which one it heard. None of them translate to '
-            'English. Try one on a short recording before relying on it.',
-            style: muted,
+          const SizedBox(height: 12),
+          _ModelDetail(
+            model: shown,
+            installed: models.isInstalled(shown.id),
+            selected: selected == shown.id,
+            downloading: models.downloading == shown.id,
+            busy: models.downloading != null,
+            progress: models.progress,
+            onSelect: () async {
+              await store.setOfflineModel(shown.id);
+              widget.onChanged();
+            },
+            onDownload: () => _downloadModel(
+                context, store, models, shown.id, widget.onChanged),
+            onCancel: models.cancel,
+            onDelete: () => _delete(context, models, shown),
           ),
-          for (final m in models.catalog.where((m) => m.kind != ModelKind.whisper))
-            _modelRow(context, models, m, selected),
           if (store.translate &&
               models.byId(selected)?.canTranslate == false)
             Padding(
@@ -1132,28 +1162,10 @@ class _OfflineModels extends StatelessWidget {
       ),
     );
   }
-
-  Widget _modelRow(BuildContext context, ModelStore models, OfflineModel m,
-          String? selected) =>
-      _ModelRow(
-        model: m,
-        installed: models.isInstalled(m.id),
-        selected: selected == m.id,
-        downloading: models.downloading == m.id,
-        busy: models.downloading != null,
-        progress: models.progress,
-        onSelect: () async {
-          await store.setOfflineModel(m.id);
-          onChanged();
-        },
-        onDownload: () =>
-            _downloadModel(context, store, models, m.id, onChanged),
-        onCancel: models.cancel,
-        onDelete: () => _delete(context, models, m),
-      );
 }
 
-class _ModelRow extends StatelessWidget {
+/// One model: what it is, and the buttons to get, use or remove it.
+class _ModelDetail extends StatelessWidget {
   final OfflineModel model;
   final bool installed;
   final bool selected;
@@ -1166,7 +1178,7 @@ class _ModelRow extends StatelessWidget {
   final VoidCallback onDownload;
   final VoidCallback onCancel;
   final VoidCallback onDelete;
-  const _ModelRow({
+  const _ModelDetail({
     required this.model,
     required this.installed,
     required this.selected,
@@ -1182,72 +1194,54 @@ class _ModelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final Widget action = downloading
-        ? TextButton(onPressed: onCancel, child: const Text('Cancel'))
-        : installed
-            ? IconButton(
-                tooltip: 'Delete ${model.label}',
-                icon: const Icon(Icons.delete_outline),
-                onPressed: onDelete,
-              )
-            : OutlinedButton(
-                onPressed: busy ? null : onDownload,
-                child: const Text('Download'),
-              );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(model.blurb, style: theme.textTheme.bodyMedium),
+        const SizedBox(height: 4),
+        Text(_size(model.size),
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 8),
+        if (downloading)
           Row(
             children: [
-              if (installed)
-                IconButton(
-                  tooltip: selected ? 'In use' : 'Use ${model.label}',
-                  onPressed: onSelect,
-                  icon: Icon(
-                    selected
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    color: selected ? scheme.primary : null,
-                  ),
+              Expanded(child: LinearProgressIndicator(value: progress)),
+              const SizedBox(width: 12),
+              Text('${(progress * 100).floor()}%',
+                  style: const TextStyle(
+                      fontFeatures: [FontFeature.tabularFigures()])),
+              TextButton(onPressed: onCancel, child: const Text('Cancel')),
+            ],
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (!installed)
+                FilledButton.tonal(
+                  onPressed: busy ? null : onDownload,
+                  child: const Text('Download'),
                 )
-              else
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Icon(Icons.download_for_offline_outlined,
-                      color: scheme.onSurfaceVariant),
+              else ...[
+                if (selected)
+                  const Chip(
+                      avatar: Icon(Icons.check, size: 18),
+                      label: Text('In use'))
+                else
+                  FilledButton(
+                      onPressed: onSelect, child: const Text('Use this model')),
+                TextButton.icon(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Delete'),
                 ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${model.label} · ${_size(model.size)}',
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    Text(model.blurb, style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              ),
-              action,
+              ],
             ],
           ),
-          if (downloading)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(52, 4, 8, 0),
-              child: Row(
-                children: [
-                  Expanded(child: LinearProgressIndicator(value: progress)),
-                  const SizedBox(width: 12),
-                  Text('${(progress * 100).floor()}%',
-                      style: const TextStyle(
-                          fontFeatures: [FontFeature.tabularFigures()])),
-                ],
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 }
