@@ -67,9 +67,18 @@ Future<List<double>?> voiceprintOf(String wav, String embeddingModel) =>
 /// mono WAV. Lines stay as they are when no voice matches.
 Future<List<TimedLine>> recogniseYou(String wav, List<TimedLine> lines,
     List<double> mine, String embeddingModel) async {
+  final you = pickYou(await speakerVoices(wav, lines, embeddingModel), mine);
+  return you == null ? lines : markAsYou(lines, you);
+}
+
+/// The voiceprint of each speaker id in [lines], from up to 30 s of what
+/// they say in [wav] (16 kHz mono WAV). Speakers heard too briefly are left
+/// out.
+Future<Map<String, List<double>>> speakerVoices(
+    String wav, List<TimedLine> lines, String embeddingModel) async {
   final ids = {for (final l in lines) ?l.speaker};
-  if (ids.isEmpty) return lines;
-  final voices = await Isolate.run(() {
+  if (ids.isEmpty) return const {};
+  return Isolate.run(() {
     sherpa.initBindings();
     final pcm = toMono16k(parseWav(File(wav).readAsBytesSync()));
     final out = <String, List<double>>{};
@@ -89,9 +98,61 @@ Future<List<TimedLine>> recogniseYou(String wav, List<TimedLine> lines,
     }
     return out;
   });
-  final you = pickYou(voices, mine);
-  return you == null ? lines : markAsYou(lines, you);
 }
+
+/// Every provider numbers the voices of one recording from "S1", so the
+/// same id in two recordings of a note need not be the same person. This
+/// maps a new recording's speaker [ids] (in order of first appearance) to
+/// ids that are right for the whole note.
+///
+/// A speaker whose voiceprint (in [voices]) matches one already [known] for
+/// the note takes that id. Anyone else gets a number no other recording of
+/// the note uses ([taken]), so two people are never shown as one. The first
+/// recording with speakers keeps its ids. [known] gains the new voices.
+Map<String, String> noteSpeakerIds({
+  required List<String> ids,
+  Map<String, List<double>> voices = const {},
+  required Map<String, List<double>> known,
+  Set<String> taken = const {},
+}) {
+  final first = known.isEmpty && taken.isEmpty;
+  int number(String id) =>
+      int.tryParse(RegExp(r'\d+').firstMatch(id)?.group(0) ?? '') ?? 0;
+  var last = [...taken, ...known.keys].map(number).fold(0, math.max);
+  final out = <String, String>{};
+  for (final id in ids) {
+    if (id == youSpeakerId) continue;
+    final voice = voices[id];
+    String? match;
+    if (voice != null) {
+      var score = sameVoice;
+      for (final k in known.entries) {
+        if (out.containsValue(k.key)) continue;
+        final s = cosine(k.value, voice);
+        if (s >= score) {
+          match = k.key;
+          score = s;
+        }
+      }
+    }
+    out[id] = match ?? (first ? id : 'S${++last}');
+  }
+  for (final e in out.entries) {
+    final voice = voices[e.key];
+    if (voice != null) known.putIfAbsent(e.value, () => voice);
+  }
+  return out;
+}
+
+/// [lines] with speaker ids replaced as [ids] says.
+List<TimedLine> renameSpeakers(
+        List<TimedLine> lines, Map<String, String> ids) =>
+    [
+      for (final l in lines)
+        ids[l.speaker] == null || ids[l.speaker] == l.speaker
+            ? l
+            : l.copyWith(speaker: ids[l.speaker]),
+    ];
 
 /// Runs in a background isolate.
 List<double>? _embed(String model, List<Float32List> parts) {

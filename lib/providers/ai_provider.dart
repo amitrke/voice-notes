@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:http/http.dart' as http;
 
 /// Container the recorder should capture in for a provider.
 enum RecordingFormat { wav16kMono, m4a }
@@ -265,6 +268,55 @@ NoteSummary summaryFromReply(String reply,
     tags: tags.toList(),
     suggestedTag: suggested,
   );
+}
+
+/// An HTTP client that gives up on a provider that has gone quiet, so a
+/// stalled connection ends in an error the user can retry instead of a note
+/// that says "Transcribing…" for ever.
+class TimeoutClient extends http.BaseClient {
+  final http.Client _inner;
+
+  /// How long to wait for the reply to start. Generous: the audio is
+  /// uploaded and transcribed within it.
+  final Duration reply;
+
+  /// How long the reply may then pause between pieces.
+  final Duration idle;
+
+  TimeoutClient(
+      {http.Client? inner,
+      this.reply = const Duration(minutes: 5),
+      this.idle = const Duration(minutes: 1)})
+      : _inner = inner ?? http.Client();
+
+  static const _tooSlow = ProviderException(
+      'The provider took too long to answer. Check your connection and retry.');
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final http.StreamedResponse res;
+    try {
+      res = await _inner.send(request).timeout(reply);
+    } on TimeoutException {
+      throw _tooSlow;
+    }
+    return http.StreamedResponse(
+      res.stream.timeout(idle, onTimeout: (sink) {
+        sink.addError(_tooSlow);
+        sink.close();
+      }),
+      res.statusCode,
+      contentLength: res.contentLength,
+      request: res.request,
+      headers: res.headers,
+      isRedirect: res.isRedirect,
+      persistentConnection: res.persistentConnection,
+      reasonPhrase: res.reasonPhrase,
+    );
+  }
+
+  @override
+  void close() => _inner.close();
 }
 
 /// Throws a [ProviderException] with the API's own error message when [status]

@@ -69,55 +69,68 @@ class HomePage extends StatelessWidget {
         ],
       ),
       bottomNavigationBar: const _RecordDock(),
-      body: Column(
-        children: [
+      // The banner, search and filter bars scroll away with the notes, so
+      // the list has room on small screens, in landscape and at large text
+      // sizes. As box adapters they stay alive off screen, which keeps the
+      // search text.
+      body: CustomScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        slivers: [
           if (!state.hasActiveKey)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: _KeyBanner(
-                  offline: state.settings.active == ProviderId.onDevice,
-                  onOpen: () => _openSettings(context)),
-            ),
-          if (state.hasAnyNotes)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: SearchBar(
-                hintText: 'Search notes',
-                leading: const Icon(Icons.search),
-                onChanged: (v) => state.query = v,
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: _KeyBanner(
+                    offline: state.settings.active == ProviderId.onDevice,
+                    onOpen: () => _openSettings(context)),
               ),
             ),
-          if (state.hasAnyNotes) const _FolderBar(),
+          if (state.hasAnyNotes)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: SearchBar(
+                  hintText: 'Search notes',
+                  leading: const Icon(Icons.search),
+                  onChanged: (v) => state.query = v,
+                ),
+              ),
+            ),
+          if (state.hasAnyNotes) const SliverToBoxAdapter(child: _FolderBar()),
           if (state.hasAnyNotes && state.approvedTags.isNotEmpty)
-            const _TagBar(),
-          Expanded(
-            child: notes.isEmpty
-                ? _Empty(searching: state.hasAnyNotes)
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    itemCount: rows.length,
-                    itemBuilder: (_, i) => switch (rows[i]) {
-                      final Note n => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: _NoteCard(
-                          note: n,
-                          query: state.query,
-                          folderName: state.folderFilter == null
-                              ? state.folders
-                                  .where((f) => f.id == n.folderId)
-                                  .firstOrNull
-                                  ?.name
-                              : null,
-                          tags: [for (final t in state.tagsOf(n)) t.name],
-                          showLanguage:
-                              languageLabel(n.languageCode) != usualLanguage,
-                        ),
-                      ),
-                      final String day => SectionLabel(day),
-                      _ => const SizedBox.shrink(),
-                    },
+            const SliverToBoxAdapter(child: _TagBar()),
+          if (notes.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _Empty(searching: state.hasAnyNotes),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              sliver: SliverList.builder(
+                itemCount: rows.length,
+                itemBuilder: (_, i) => switch (rows[i]) {
+                  final Note n => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _NoteCard(
+                      note: n,
+                      query: state.query,
+                      folderName: state.folderFilter == null
+                          ? state.folders
+                              .where((f) => f.id == n.folderId)
+                              .firstOrNull
+                              ?.name
+                          : null,
+                      tags: [for (final t in state.tagsOf(n)) t.name],
+                      showLanguage:
+                          languageLabel(n.languageCode) != usualLanguage,
+                    ),
                   ),
-          ),
+                  final String day => SectionLabel(day),
+                  _ => const SizedBox.shrink(),
+                },
+              ),
+            ),
         ],
       ),
     );

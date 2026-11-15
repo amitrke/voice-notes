@@ -138,8 +138,7 @@ class SettingsStore {
           key: 'voiceprint', value: oldPrint, iOptions: _thisPhoneOnly);
       await _prefs.remove('voiceprint');
     }
-    voiceprint = _voiceprintFrom(
-        await _secure.read(key: 'voiceprint', iOptions: _thisPhoneOnly));
+    voiceprint = _voiceprintFrom(await _read('voiceprint', _thisPhoneOnly));
     textScale = snapTextScale(_prefs.getDouble('textScale') ?? defaultTextScale);
     _offlineModel = _prefs.getString('offlineModel');
     deleteAudioAfter = _prefs.getBool('deleteAudioAfter') ?? false;
@@ -147,8 +146,21 @@ class SettingsStore {
     dictionary =
         Dictionary.fromLines(_prefs.getStringList('dictionary') ?? const []);
     for (final id in ProviderId.values) {
-      final k = await _secure.read(key: 'apikey_${id.name}');
+      final k = await _read('apikey_${id.name}');
       if (k != null && k.isNotEmpty) _keys[id] = k;
+    }
+  }
+
+  /// A value from secure storage, or null when it cannot be read: after a
+  /// restore onto another phone the keystore can no longer decrypt what was
+  /// saved, and that must cost a key to re-enter, not the app starting.
+  Future<String?> _read(String key, [IOSOptions? iOptions]) async {
+    try {
+      return iOptions == null
+          ? await _secure.read(key: key)
+          : await _secure.read(key: key, iOptions: iOptions);
+    } catch (_) {
+      return null;
     }
   }
 

@@ -23,7 +23,7 @@ class OpenAiProvider implements AiProvider {
     this.sttModel = 'whisper-1',
     this.textModel = 'gpt-4o-mini',
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? TimeoutClient();
 
   @override
   ProviderId get id => ProviderId.openai;

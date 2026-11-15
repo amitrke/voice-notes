@@ -44,6 +44,9 @@ class _RecordScreenState extends State<RecordScreen> {
   bool _splitting = false;
   bool _stopping = false;
 
+  /// Stop or Cancel is under way; further taps do nothing.
+  bool _closing = false;
+
   /// The note the parts go to; set once the first part is saved.
   late int? _noteId = widget.noteId;
 
@@ -67,7 +70,17 @@ class _RecordScreenState extends State<RecordScreen> {
   Future<void> _begin() async {
     try {
       await _recorder.start(widget.format);
+      // Cancelled while the microphone was starting up.
+      if (!mounted || _closing) {
+        await _recorder.cancel();
+        return;
+      }
       await keepRecordingInBackground(true);
+      if (!mounted || _closing) {
+        await keepRecordingInBackground(false);
+        await _recorder.cancel();
+        return;
+      }
       _clock.start();
       _levelSub = _recorder.levels().listen((v) {
         _levels
@@ -87,10 +100,12 @@ class _RecordScreenState extends State<RecordScreen> {
       });
       setState(() => _recording = true);
     } on MicPermissionDenied {
+      if (!mounted) return;
       setState(
         () => _error = 'Microphone access is off. Enable it for Voice Notes in system settings.',
       );
     } catch (e) {
+      if (!mounted || _closing) return;
       setState(() => _error = 'Could not start recording: $e');
     }
   }
@@ -147,6 +162,7 @@ class _RecordScreenState extends State<RecordScreen> {
   Future<void> _stop({bool interrupted = false}) async {
     if (_stopping) return;
     _stopping = true;
+    _closing = true;
     _ticker?.cancel();
     _clock.stop();
     await _levelSub?.cancel();
@@ -234,6 +250,7 @@ class _RecordScreenState extends State<RecordScreen> {
   static const _confirmAfter = Duration(seconds: 5);
 
   Future<void> _cancel() async {
+    if (_closing) return;
     if (_recording && _clock.elapsed >= _confirmAfter) {
       final discard = await showDialog<bool>(
         context: context,
@@ -255,14 +272,17 @@ class _RecordScreenState extends State<RecordScreen> {
           ],
         ),
       );
-      if (discard != true || !mounted) return;
+      if (discard != true || !mounted || _closing) return;
     }
+    _closing = true;
     _ticker?.cancel();
     await _levelSub?.cancel();
     while (_splitting) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
-    if (_recording) await _recorder.cancel();
+    try {
+      if (_recording) await _recorder.cancel();
+    } catch (_) {}
     await keepRecordingInBackground(false);
     final id = _noteId;
     if (id != null) {
@@ -490,21 +510,30 @@ class _RecordScreenState extends State<RecordScreen> {
                           child: Column(
                             children: [
                               const SizedBox(height: 32),
-                              Text(
-                                formatDuration(_clock.elapsedMilliseconds),
-                                style: textTheme.displayLarge?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
+                              // Shrinks to fit at very large text sizes.
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  formatDuration(_clock.elapsedMilliseconds),
+                                  maxLines: 1,
+                                  style: textTheme.displayLarge?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
                                 ),
                               ),
                               const SizedBox(height: 32),
                               ExcludeSemantics(
                                 child: SizedBox(
                                   height: 100,
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
+                                  // 320 wide at full size; narrower screens
+                                  // get the whole meter, scaled down.
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       for (final v in _levels)
                                         Container(
@@ -520,6 +549,7 @@ class _RecordScreenState extends State<RecordScreen> {
                                           ),
                                         ),
                                     ],
+                                  ),
                                   ),
                                 ),
                               ),
@@ -547,7 +577,7 @@ class _RecordScreenState extends State<RecordScreen> {
                         label: 'Stop and save',
                         excludeSemantics: true,
                         child: InkResponse(
-                          onTap: _recording ? _stop : null,
+                          onTap: _recording && !_closing ? _stop : null,
                           radius: 48,
                           child: Container(
                             width: 88,
