@@ -17,6 +17,7 @@ import 'audio_input.dart';
 import 'clinical_page.dart';
 import 'folders.dart';
 import 'format.dart';
+import 'share_origin.dart';
 import 'stale_banner.dart';
 import 'tags.dart';
 import 'templates_ui.dart';
@@ -42,13 +43,15 @@ class _NotePageState extends State<NotePage> {
     super.dispose();
   }
 
-  Future<void> _exportSrt(Note note, {required bool english}) async {
+  Future<void> _exportSrt(Note note,
+      {required bool english, Rect? origin}) async {
     final dir = await getTemporaryDirectory();
     final safe = note.title.replaceAll(RegExp(r'[^\w\- ]+'), '').trim();
     final file = File('${dir.path}/${safe.isEmpty ? 'subtitles' : safe}'
         '${english ? ' (English)' : ''}.srt');
     await file.writeAsString(srtText(note, english: english));
-    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+    await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], sharePositionOrigin: origin));
   }
 
   /// Opens what template [templateId] made from note [id].
@@ -119,7 +122,9 @@ class _NotePageState extends State<NotePage> {
         ],
       ),
     );
-    if (ok == true) await state.deleteSegment(note.id!, seg.id!);
+    if (ok != true) return;
+    await _playback.stopIf(seg.id!);
+    await state.deleteSegment(note.id!, seg.id!);
   }
 
   Future<void> _delete(AppState state) async {
@@ -234,7 +239,9 @@ class _NotePageState extends State<NotePage> {
               } else if (v == 'retry') {
                 await state.retry(note.id!);
               } else if (v == 'srt') {
-                await _exportSrt(note, english: showEnglish);
+                await _exportSrt(note,
+                    english: showEnglish,
+                    origin: shareOrigin(context, topRight: true));
               } else if (v == 'folder') {
                 await moveNoteToFolder(context, note);
               } else if (v == 'tags') {
@@ -354,28 +361,7 @@ class _NotePageState extends State<NotePage> {
             ),
             const SizedBox(height: 12),
           ],
-          if (note.segments.isNotEmpty)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                child: Column(
-                  children: [
-                    for (final (i, seg) in note.segments.indexed) ...[
-                      if (i > 0) const Divider(height: 16),
-                      _SegmentTile(
-                        key: ValueKey(seg.id),
-                        index: i,
-                        segment: seg,
-                        count: note.segments.length,
-                        playback: _playback,
-                        onRetry: () => state.retrySegment(note.id!, seg.id!),
-                        onDelete: () => _deleteSegment(state, note, seg),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
+          if (note.segments.isNotEmpty) _recordings(state, note),
           if (ready) ...[
             if (note.summary.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -439,6 +425,63 @@ class _NotePageState extends State<NotePage> {
               ..._templatesEntry(state, note),
           ],
         ],
+      ),
+    );
+  }
+
+  /// A note with more recordings than this shows them folded into one row,
+  /// so a long meeting does not push its summary and transcript far down.
+  static const _foldAfter = 3;
+
+  /// The note's recordings, each with its player and status.
+  Widget _recordings(AppState state, Note note) {
+    final segs = note.segments;
+    final tiles = [
+      for (final (i, seg) in segs.indexed) ...[
+        if (i > 0) const Divider(height: 16),
+        _SegmentTile(
+          key: ValueKey(seg.id),
+          index: i,
+          segment: seg,
+          count: segs.length,
+          playback: _playback,
+          onRetry: () => state.retrySegment(note.id!, seg.id!),
+          onDelete: () => _deleteSegment(state, note, seg),
+        ),
+      ],
+    ];
+    if (segs.length <= _foldAfter) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          child: Column(children: tiles),
+        ),
+      );
+    }
+    final failed = segs.where((s) => s.status == NoteStatus.failed).length;
+    final pending =
+        segs.where((s) => s.status == NoteStatus.processing).length;
+    final total = note.durationMs;
+    return Card(
+      child: ExpansionTile(
+        shape: const Border(),
+        collapsedShape: const Border(),
+        // Open at first only when something needs the user.
+        initiallyExpanded: failed > 0,
+        leading: const Icon(Icons.graphic_eq),
+        title: Text([
+          '${segs.length} recordings',
+          if (total != null) formatDuration(total),
+        ].join(' · ')),
+        subtitle: Text(failed > 0
+            ? '$failed failed · open to retry'
+            : pending > 0
+                ? '${segs.length - pending} of ${segs.length} transcribed'
+                : hasTimedText(note) && segs.any((s) => s.hasAudio)
+                    ? 'Tap a line of the transcript to play from there'
+                    : 'Open to play or delete them'),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 8, 8),
+        children: tiles,
       ),
     );
   }
@@ -599,8 +642,8 @@ class _SegmentTile extends StatelessWidget {
 class _AudioBar extends StatefulWidget {
   final String path;
 
-  /// Length recorded when the audio was captured, shown until the player
-  /// has loaded the file and reports its own.
+  /// Length recorded when the audio was captured, shown until the recording
+  /// is played and the player reports its own.
   final int? knownDurationMs;
   final int segmentId;
   final Playback playback;
@@ -616,153 +659,177 @@ class _AudioBar extends StatefulWidget {
 }
 
 class _AudioBarState extends State<_AudioBar> {
-  final _player = AudioPlayer();
-  final _subs = <StreamSubscription<dynamic>>[];
-  PlayerState _state = PlayerState.stopped;
-  Duration _pos = Duration.zero;
-  Duration _dur = Duration.zero;
-  bool _missing = false;
+  late bool _missing = !File(widget.path).existsSync();
 
   @override
-  void initState() {
-    super.initState();
-    _missing = !File(widget.path).existsSync();
-    _subs
-      ..add(_player.onPlayerStateChanged.listen((s) {
-        setState(() => _state = s);
-        if (s == PlayerState.playing) widget.playback.started(widget.segmentId);
-      }))
-      ..add(_player.onPositionChanged.listen((d) {
-        setState(() => _pos = d);
-        widget.playback.moved(widget.segmentId, d.inMilliseconds);
-      }))
-      ..add(_player.onDurationChanged.listen((d) => setState(() => _dur = d)))
-      ..add(_player.onPlayerComplete.listen((_) {
-        setState(() => _pos = Duration.zero);
-        widget.playback.stopped(widget.segmentId);
-      }));
-    if (!_missing) {
-      widget.playback.attach(widget.segmentId,
-          playFrom: _playFrom, pause: _player.pause);
-    }
-    // Loading the file up front gives the length (imports don't record one)
-    // and lets the slider seek before the first play.
-    if (!_missing) _player.setSource(DeviceFileSource(widget.path));
-  }
-
-  @override
-  void dispose() {
-    widget.playback.detach(widget.segmentId);
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _player.dispose();
-    super.dispose();
-  }
-
-  Future<void> _playFrom(int ms) async {
-    if (_state == PlayerState.playing || _state == PlayerState.paused) {
-      await _player.seek(Duration(milliseconds: ms));
-      if (_state == PlayerState.paused) await _player.resume();
-    } else {
-      await _player.play(DeviceFileSource(widget.path),
-          position: Duration(milliseconds: ms));
-    }
-  }
-
-  Future<void> _toggle() async {
-    if (_state == PlayerState.playing) {
-      await _player.pause();
-    } else if (_state == PlayerState.paused) {
-      await _player.resume();
-    } else {
-      await _player.play(DeviceFileSource(widget.path));
-    }
+  void didUpdateWidget(_AudioBar old) {
+    super.didUpdateWidget(old);
+    if (old.path != widget.path) _missing = !File(widget.path).existsSync();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_missing) return const Text('Audio file is no longer available.');
-    final playing = _state == PlayerState.playing;
-    final maxMs = _dur.inMilliseconds.toDouble();
-    final totalMs =
-        _dur > Duration.zero ? _dur.inMilliseconds : widget.knownDurationMs;
-    return Row(
-      children: [
-        IconButton.filled(
-          tooltip: playing ? 'Pause' : 'Play',
-          onPressed: _toggle,
-          icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-        ),
-        Expanded(
-          child: Slider(
-            value: maxMs <= 0 ? 0 : _pos.inMilliseconds.clamp(0, maxMs.toInt()).toDouble(),
-            max: maxMs <= 0 ? 1 : maxMs,
-            onChanged: maxMs <= 0
-                ? null
-                : (v) => _player.seek(Duration(milliseconds: v.toInt())),
-          ),
-        ),
-        Text(
-          [
-            // Always shown, so the label keeps its width when play starts.
-            formatDuration(_pos.inMilliseconds),
-            if (totalMs != null) formatDuration(totalMs),
-          ].join(' / '),
-          style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
-        ),
-      ],
+    final playback = widget.playback;
+    final id = widget.segmentId;
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        final playing = playback.isPlaying(id);
+        final dur = playback.durationOf(id);
+        final posMs = playback.positionOf(id);
+        final maxMs = dur.inMilliseconds.toDouble();
+        final totalMs =
+            dur > Duration.zero ? dur.inMilliseconds : widget.knownDurationMs;
+        return Row(
+          children: [
+            IconButton.filled(
+              tooltip: playing ? 'Pause' : 'Play',
+              onPressed: () => playback.toggle(id, widget.path),
+              icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+            ),
+            Expanded(
+              child: Slider(
+                value: maxMs <= 0 ? 0 : posMs.clamp(0, maxMs.toInt()).toDouble(),
+                max: maxMs <= 0 ? 1 : maxMs,
+                onChanged:
+                    maxMs <= 0 ? null : (v) => playback.seek(v.toInt()),
+              ),
+            ),
+            Text(
+              [
+                // Always shown, so the label keeps its width when play starts.
+                formatDuration(posMs),
+                if (totalMs != null) formatDuration(totalMs),
+              ].join(' / '),
+              style:
+                  const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-/// Links a note's players to its transcript: which recording is playing and
-/// where, and a way for a tapped line to start playback there.
+/// The one audio player of a note page. Every recording's bar and the
+/// transcript drive it, so a note with fifty recordings still holds a single
+/// player, and a tapped line plays whether or not its bar is on screen.
 class Playback extends ChangeNotifier {
-  final _players =
-      <int, ({Future<void> Function(int) playFrom, Future<void> Function() pause})>{};
+  AudioPlayer? _player;
+  final _subs = <StreamSubscription<dynamic>>[];
   int? _segment;
   int _posMs = 0;
+  Duration _dur = Duration.zero;
+  PlayerState _state = PlayerState.stopped;
+  bool _disposed = false;
 
-  /// The recording playing (or last paused), if any.
+  /// The recording playing (or paused), if any.
   int? get segment => _segment;
   int get positionMs => _posMs;
 
-  void attach(int segmentId,
-          {required Future<void> Function(int) playFrom,
-          required Future<void> Function() pause}) =>
-      _players[segmentId] = (playFrom: playFrom, pause: pause);
+  bool isPlaying(int segmentId) =>
+      _segment == segmentId && _state == PlayerState.playing;
 
-  void detach(int segmentId) => _players.remove(segmentId);
+  /// Where [segmentId] is in its playback; zero when it is not the one loaded.
+  int positionOf(int segmentId) => _segment == segmentId ? _posMs : 0;
 
-  /// Plays [segmentId] from [ms], pausing any other recording.
-  Future<void> playAt(int segmentId, int ms) async {
-    for (final e in _players.entries) {
-      if (e.key != segmentId) await e.value.pause();
+  /// The length of [segmentId], known once it is loaded.
+  Duration durationOf(int segmentId) =>
+      _segment == segmentId ? _dur : Duration.zero;
+
+  void _changed() {
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Created on first use, so opening a note costs no player.
+  AudioPlayer _ready() {
+    final existing = _player;
+    if (existing != null) return existing;
+    final player = _player = AudioPlayer();
+    _subs
+      ..add(player.onPlayerStateChanged.listen((s) {
+        _state = s;
+        _changed();
+      }))
+      ..add(player.onPositionChanged.listen((d) {
+        _posMs = d.inMilliseconds;
+        _changed();
+      }))
+      ..add(player.onDurationChanged.listen((d) {
+        _dur = d;
+        _changed();
+      }))
+      ..add(player.onPlayerComplete.listen((_) {
+        _segment = null;
+        _posMs = 0;
+        _dur = Duration.zero;
+        _changed();
+      }));
+    return player;
+  }
+
+  bool get _loaded =>
+      _state == PlayerState.playing || _state == PlayerState.paused;
+
+  /// Plays the recording [segmentId], stored at [path], from [ms]. Whatever
+  /// else was playing stops.
+  Future<void> playAt(int segmentId, String path, int ms) async {
+    final player = _ready();
+    final same = _segment == segmentId && _loaded;
+    _segment = segmentId;
+    _posMs = ms;
+    if (!same) _dur = Duration.zero;
+    _changed();
+    try {
+      if (same) {
+        await player.seek(Duration(milliseconds: ms));
+        if (_state == PlayerState.paused) await player.resume();
+      } else {
+        await player.stop();
+        await player.play(DeviceFileSource(path),
+            position: Duration(milliseconds: ms));
+      }
+    } catch (_) {
+      // An unreadable file: show it as not playing rather than stuck.
+      if (_segment == segmentId) _segment = null;
+      _changed();
     }
-    _segment = segmentId;
-    _posMs = ms;
-    notifyListeners();
-    await _players[segmentId]?.playFrom(ms);
   }
 
-  void started(int segmentId) {
-    if (_segment == segmentId) return;
-    _segment = segmentId;
-    notifyListeners();
+  /// Play, pause or resume [segmentId].
+  Future<void> toggle(int segmentId, String path) async {
+    final player = _player;
+    if (player != null && _segment == segmentId && _loaded) {
+      return _state == PlayerState.playing ? player.pause() : player.resume();
+    }
+    return playAt(segmentId, path, 0);
   }
 
-  void moved(int segmentId, int ms) {
-    _segment = segmentId;
-    _posMs = ms;
-    notifyListeners();
-  }
+  /// Moves the loaded recording to [ms].
+  Future<void> seek(int ms) async =>
+      _player?.seek(Duration(milliseconds: ms));
 
-  void stopped(int segmentId) {
+  /// Stops [segmentId] if it is the one loaded (it is being deleted).
+  Future<void> stopIf(int segmentId) async {
     if (_segment != segmentId) return;
     _segment = null;
     _posMs = 0;
-    notifyListeners();
+    _dur = Duration.zero;
+    _changed();
+    try {
+      await _player?.stop();
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _player?.dispose();
+    super.dispose();
   }
 }
 
@@ -822,7 +889,9 @@ class _TimedTranscript extends StatelessWidget {
                 playback.positionMs < l.endMs;
             children.add(InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => playback.playAt(seg.id!, l.startMs),
+              onTap: seg.hasAudio
+                  ? () => playback.playAt(seg.id!, seg.audioPath, l.startMs)
+                  : null,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

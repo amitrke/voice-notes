@@ -33,7 +33,7 @@ class SarvamProvider implements AiProvider {
     this.pollInterval = const Duration(seconds: 4),
     this.batchTimeout = const Duration(minutes: 15),
     this.toWav,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? TimeoutClient();
 
   @override
   ProviderId get id => ProviderId.sarvam;

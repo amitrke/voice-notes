@@ -18,7 +18,12 @@ class AppState extends ChangeNotifier {
   final SettingsStore settings;
   final NotesDb db;
 
-  AppState(this.settings, this.db) {
+  /// Where recordings are kept ([audioDir]; tests pass a temp folder).
+  final Future<Directory> Function() _audioDir;
+
+  AppState(this.settings, this.db,
+      {Future<Directory> Function()? audioDirectory})
+      : _audioDir = audioDirectory ?? audioDir {
     // A finished or deleted model download changes whether the on-device
     // provider is ready. Progress ticks alone don't need a rebuild.
     var ready = settings.offlineModel;
@@ -179,21 +184,33 @@ class AppState extends ChangeNotifier {
       }
       await _save(n.withSegments(segs));
     }
-    // Notes restored onto a new phone by its own backup come without their
-    // recordings; keep the text, as if the audio had been deleted.
+    // A recording saved under an absolute path by an earlier version may
+    // still be in the recordings folder, which has moved (an iPhone restore
+    // or update); find it there by name. Otherwise the note came from a
+    // backup without its recordings: keep the text, as if the audio had been
+    // deleted.
+    final root = db.audioRoot;
     for (final n in _notes.toList()) {
       if (!n.segments.any((s) => s.hasAudio && !File(s.audioPath).existsSync())) {
         continue;
       }
       final segs = <Segment>[];
       for (final s in n.segments) {
-        segs.add(s.hasAudio && !File(s.audioPath).existsSync()
-            ? await db.saveSegment(s.copyWith(audioPath: ''))
-            : s);
+        if (!s.hasAudio || File(s.audioPath).existsSync()) {
+          segs.add(s);
+          continue;
+        }
+        final moved =
+            root == null ? null : p.join(root, p.basename(s.audioPath));
+        segs.add(await db.saveSegment(s.copyWith(
+            audioPath:
+                moved != null && File(moved).existsSync() ? moved : '')));
       }
       await _save(n.withSegments(segs));
     }
   }
+
+  /// The last part of a stored path, whichever platform wrote it.
 
   Future<void> _save(Note n) async {
     final i = _notes.indexWhere((e) => e.id == n.id);
@@ -474,7 +491,7 @@ class AppState extends ChangeNotifier {
 
   /// Copies a picked file into app storage so it survives cache cleanup.
   Future<String> importFile(String sourcePath) async {
-    final dir = await audioDir();
+    final dir = await _audioDir();
     final name = '${DateTime.now().millisecondsSinceEpoch}_${p.basename(sourcePath)}';
     final dest = p.join(dir.path, name);
     await File(sourcePath).copy(dest);
@@ -530,6 +547,7 @@ class AppState extends ChangeNotifier {
               error: providerId.needsKey
                   ? 'Add your ${providerId.label} API key in Settings, then retry.'
                   : 'Download an offline model in Settings, then retry.'));
+      await _afterTranscription(noteId);
       return;
     }
     final path =
@@ -543,61 +561,103 @@ class AppState extends ChangeNotifier {
           translate: settings.translate,
           vocabulary: dictionary.hints,
           speakers: settings.identifySpeakers));
-      final t = Transcription(
-          text: heard.text,
-          english: heard.english,
-          languageCode: heard.languageCode,
-          lines: await _recogniseYou(path, heard.lines));
-      await _editSegment(
-          noteId,
-          segId,
-          (s) => s.copyWith(
-                transcript: t.text,
-                english: t.english,
-                languageCode: t.languageCode,
-                lines: t.lines,
-                status: NoteStatus.done,
-                clearError: true,
-              ));
+      final voices = await _speakerVoices(path, heard.lines);
+      // One recording at a time from here to the save, so two parts that
+      // finish together never hand out the same speaker number.
+      final t = await _oneAtATime(() async {
+        final t = Transcription(
+            text: heard.text,
+            english: heard.english,
+            languageCode: heard.languageCode,
+            lines: _labelSpeakers(noteId, segId, heard.lines, voices));
+        await _editSegment(
+            noteId,
+            segId,
+            (s) => s.copyWith(
+                  transcript: t.text,
+                  english: t.english,
+                  languageCode: t.languageCode,
+                  lines: t.lines,
+                  status: NoteStatus.done,
+                  clearError: true,
+                ));
+        return t;
+      });
       // Only once the text is safely stored, and only if there is some:
       // an empty result may just mean the audio was bad, and deserves a retry.
       if (settings.deleteAudioAfter && t.text.trim().isNotEmpty) {
         await _discardAudio(noteId, segId, path);
       }
     } catch (e) {
+      // The parts that did work still get their title and summary below; if
+      // this one finished last, nothing else would write them.
       await _editSegment(noteId, segId,
           (s) => s.copyWith(status: NoteStatus.failed, error: _describe(e)));
-      return;
     }
     await _updateLiveNotes(noteId);
     await _afterTranscription(noteId);
   }
 
-  /// Labels the owner's lines "You" when their voiceprint is set up and the
-  /// speaker models are downloaded. Any failure just leaves the labels as
-  /// they were.
-  Future<List<TimedLine>> _recogniseYou(
+  /// The voiceprint of each speaker heard in [lines], when the speaker
+  /// models are downloaded; empty otherwise, or on any failure.
+  Future<Map<String, List<double>>> _speakerVoices(
       String audio, List<TimedLine> lines) async {
-    final mine = settings.voiceprint;
-    if (mine == null || !lines.any((l) => l.speaker != null)) return lines;
+    if (!lines.any((l) => l.speaker != null)) return const {};
     final models = settings.models.installedSpeakers();
-    if (models == null) return lines;
+    if (models == null) return const {};
     File? temp;
     try {
       var wav = audio;
       if (p.extension(audio).toLowerCase() != '.wav') {
         temp = await convertToWav16kMono(File(audio));
-        if (temp == null) return lines;
+        if (temp == null) return const {};
         wav = temp.path;
       }
-      return await recogniseYou(wav, lines, mine, models.embedding);
+      return await speakerVoices(wav, lines, models.embedding);
     } catch (_) {
-      return lines;
+      return const {};
     } finally {
       try {
         await temp?.delete();
       } catch (_) {}
     }
+  }
+
+  /// Voices heard so far in each note, by speaker id, to recognise them in
+  /// its later recordings. Kept only while the app runs.
+  final _voices = <int, Map<String, List<double>>>{};
+
+  /// Labels the owner's lines "You" when their voiceprint is set up, and
+  /// gives everyone else an id that holds across the note's recordings; see
+  /// [noteSpeakerIds].
+  List<TimedLine> _labelSpeakers(int noteId, int segId, List<TimedLine> lines,
+      Map<String, List<double>> voices) {
+    final mine = settings.voiceprint;
+    final you = mine == null ? null : pickYou(voices, mine);
+    if (you != null) lines = markAsYou(lines, you);
+    final taken = {
+      for (final s in byId(noteId)?.segments ?? const <Segment>[])
+        if (s.id != segId)
+          for (final l in s.lines)
+            if (l.speaker != null && l.speaker != youSpeakerId) l.speaker!,
+    };
+    return renameSpeakers(
+        lines,
+        noteSpeakerIds(
+          ids: {for (final l in lines) ?l.speaker}.toList(),
+          voices: voices,
+          known: _voices.putIfAbsent(noteId, () => {}),
+          taken: taken,
+        ));
+  }
+
+  Future<void> _serial = Future.value();
+
+  /// Runs [work] after any earlier call has finished.
+  Future<T> _oneAtATime<T>(Future<T> Function() work) {
+    final run = _serial.then((_) => work());
+    _serial = run.then((_) {}, onError: (_) {});
+    return run;
   }
 
   final _live = <int, LiveSession>{};
@@ -687,8 +747,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _afterTranscription(int noteId) async {
     final n = byId(noteId);
-    // Wait until the last pending recording has finished.
-    if (n == null || n.status == NoteStatus.processing) return;
+    // Wait until the last pending recording has finished. When every one
+    // failed there is no text to sum up; a retry comes back here.
+    if (n == null || n.status != NoteStatus.done) return;
     final live = _live[noteId];
     // Still recording: more is coming, so it is too early to sum up. A
     // stand-in title keeps the note recognisable in the list meanwhile.
@@ -887,6 +948,8 @@ class AppState extends ChangeNotifier {
     final n = byId(id);
     if (n == null) return;
     await db.delete(id);
+    _live.remove(id);
+    _voices.remove(id);
     _notes.removeWhere((e) => e.id == id);
     notifyListeners();
     for (final s in n.segments) {

@@ -107,7 +107,7 @@ void main() {
   test('notes whose recordings are gone keep their text', () async {
     final d = await db('y');
     await d.insert(note('text stays', DateTime(2026, 10, 3)));
-    final s = AppState(await _settings(), d);
+    final s = AppState(await _settings(), d, audioDirectory: () async => tmp);
     await s.init();
     final n = s.notes.single;
     expect(n.transcript, 'text stays');

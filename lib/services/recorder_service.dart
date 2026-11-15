@@ -16,6 +16,16 @@ class MicPermissionDenied implements Exception {
   String toString() => 'Microphone permission was denied.';
 }
 
+/// Recording could not go on after a part ended. [saved] is that part, which
+/// is complete and must not be lost.
+class RecordingInterrupted implements Exception {
+  final RecordingResult? saved;
+  final Object cause;
+  const RecordingInterrupted(this.saved, this.cause);
+  @override
+  String toString() => 'Recording stopped: $cause';
+}
+
 /// A recording is saved in parts so each can be transcribed while recording
 /// goes on. A part ends at the first pause once it is [splitAfter] long, or at
 /// [splitBy] whatever is being said.
@@ -67,10 +77,18 @@ class RecorderService {
   }
 
   /// Ends the part being recorded and starts the next one straight away.
+  /// Throws [RecordingInterrupted], carrying the finished part, when the next
+  /// one cannot start.
   Future<RecordingResult?> split() async {
     final format = _format;
     final done = await stop();
-    if (format != null) await start(format);
+    if (format != null) {
+      try {
+        await start(format);
+      } catch (e) {
+        throw RecordingInterrupted(done, e);
+      }
+    }
     return done;
   }
 

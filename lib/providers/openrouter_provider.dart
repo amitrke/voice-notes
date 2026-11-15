@@ -19,7 +19,7 @@ class OpenRouterProvider implements AiProvider {
     required this.apiKey,
     this.textModel = 'openrouter/free',
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? TimeoutClient();
 
   @override
   ProviderId get id => ProviderId.openrouter;

@@ -10,6 +10,7 @@ import '../data/app_state.dart';
 import '../data/clinical_export.dart';
 import '../models/note.dart';
 import 'format.dart';
+import 'share_origin.dart';
 import 'stale_banner.dart';
 import 'theme.dart';
 
@@ -33,14 +34,15 @@ class _ClinicalPageState extends State<ClinicalPage> {
         .showSnackBar(SnackBar(content: Text('$what copied')));
   }
 
-  Future<void> _exportTxt(Note note) async {
+  Future<void> _exportTxt(Note note, Rect? origin) async {
     final dir = await getTemporaryDirectory();
     final safe = note.title.replaceAll(RegExp(r'[^\w\- ]+'), '').trim();
     final file = File(
       '${dir.path}/${safe.isEmpty ? 'clinical-note' : safe}.txt',
     );
     await file.writeAsString(clinicalReportText(note));
-    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+    await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], sharePositionOrigin: origin));
   }
 
   Future<void> _regenerate(AppState state, int id) async {
@@ -70,9 +72,11 @@ class _ClinicalPageState extends State<ClinicalPage> {
       appBar: AppBar(title: const Text('Clinical note')),
       bottomNavigationBar: _BottomBar(
         children: [
-          FilledButton(
-            onPressed: () => _exportTxt(note),
-            child: const Text('Export TXT'),
+          Builder(
+            builder: (button) => FilledButton(
+              onPressed: () => _exportTxt(note, shareOrigin(button)),
+              child: const Text('Export TXT'),
+            ),
           ),
           OutlinedButton(
             onPressed: () => _copy(clinicalReportText(note), 'Full report'),

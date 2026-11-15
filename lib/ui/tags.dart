@@ -48,7 +48,7 @@ Future<void> editNoteTags(BuildContext context, int noteId) =>
         if (note == null) return const SizedBox.shrink();
         final mine = state.tagsOf(note).map((t) => t.id).toSet();
         return SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
