@@ -5,11 +5,13 @@ import '../data/app_state.dart';
 import '../data/find_replace.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import 'ask_page.dart';
 import 'audio_input.dart';
 import 'folders.dart';
 import 'format.dart';
 import 'note_page.dart';
 import 'replace_page.dart';
+
 import 'settings_page.dart';
 import 'tags.dart';
 import 'theme.dart';
@@ -50,6 +52,13 @@ class HomePage extends StatelessWidget {
             icon: const Icon(Icons.file_upload_outlined),
             onPressed: () => importAudio(context),
           ),
+          if (state.hasAnyNotes)
+            IconButton(
+              tooltip: 'Ask your notes',
+              icon: const Icon(Icons.question_answer_outlined),
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AskPage())),
+            ),
           if (state.hasAnyNotes)
             IconButton(
               tooltip: 'Find and replace',

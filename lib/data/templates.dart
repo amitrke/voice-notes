@@ -60,6 +60,41 @@ const builtInTemplates = [
         'they fall into clear groups.',
   ),
   NoteTemplate(
+    id: 'study',
+    name: 'Study guide',
+    blurb: 'Key points, terms and review questions',
+    builtIn: true,
+    instructions: 'Turn the lecture or talk into a study guide: "Summary" in '
+        'two or three sentences; "Key points", one per line starting with '
+        '"- "; "Terms", each as term: short definition, one per line '
+        'starting with "- "; and "Review questions" a student should be able '
+        'to answer, one per line starting with "- ". Keep only what was '
+        'said; do not add facts from outside the recording.',
+  ),
+  NoteTemplate(
+    id: 'flashcards',
+    name: 'Flashcards',
+    blurb: 'Question and answer cards',
+    builtIn: true,
+    instructions: 'Make flashcards from the facts, terms and ideas in the '
+        'note. Give one section per card: the "heading" is the question or '
+        'term, the "body" is the short answer. Make 5 to 15 cards, each '
+        'testing one thing, and use only what was said.',
+  ),
+  NoteTemplate(
+    id: 'quiz',
+    name: 'Quiz',
+    blurb: 'Multiple choice with an answer key',
+    builtIn: true,
+    instructions: 'Write a multiple-choice quiz of 5 to 10 questions about '
+        'what was said. Give one section per question: the "heading" is the '
+        'question, the "body" lists four options on lines starting with '
+        '"A) ", "B) ", "C) " and "D) ". Make only one option correct and '
+        'vary its letter. End with a section headed "Answer key" listing '
+        'each question number and the correct letter, one per line, with '
+        'one short line on why. Ask only about what was said.',
+  ),
+  NoteTemplate(
     id: 'recipe',
     name: 'Recipe',
     blurb: 'Ingredients and steps',

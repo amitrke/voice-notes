@@ -13,6 +13,7 @@ import '../data/srt_export.dart';
 import '../data/templates.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import 'ask_page.dart';
 import 'audio_input.dart';
 import 'clinical_page.dart';
 import 'folders.dart';
@@ -532,6 +533,15 @@ class _NotePageState extends State<NotePage> {
                 child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.auto_fix_high),
         label: Text(_enriching ? 'Working…' : 'Turn into…'),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => AskPage(noteId: note.id))),
+        icon: const Icon(Icons.question_answer_outlined),
+        label: const Text('Ask about this note'),
       ),
     ];
   }
