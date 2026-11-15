@@ -67,11 +67,18 @@ class RecorderService {
   }
 
   /// Ends the part being recorded and starts the next one straight away.
-  Future<RecordingResult?> split() async {
+  /// The finished part is returned even when the next one could not start
+  /// (the microphone was taken by a call, say); [error] then says why, and
+  /// nothing is being recorded any more.
+  Future<({RecordingResult? part, Object? error})> split() async {
     final format = _format;
     final done = await stop();
-    if (format != null) await start(format);
-    return done;
+    try {
+      if (format != null) await start(format);
+    } catch (e) {
+      return (part: done, error: e);
+    }
+    return (part: done, error: null);
   }
 
   /// Input level from 0 (silence) to 1 (loud), sampled every [interval].

@@ -17,6 +17,7 @@ import '../services/model_store.dart';
 import '../services/recorder_service.dart';
 import 'dictionary_page.dart';
 import 'links.dart';
+import 'share_origin.dart';
 import 'tags.dart';
 import 'templates_ui.dart';
 import 'text_size.dart';
@@ -135,6 +136,7 @@ void _open(BuildContext context, Widget page) =>
 /// Writes a backup file and opens the share sheet to save it.
 Future<void> _backUp(BuildContext context, AppState state) async {
   final messenger = ScaffoldMessenger.of(context);
+  final origin = shareOrigin(context);
   try {
     final dir = await getTemporaryDirectory();
     final day = DateTime.now().toIso8601String().substring(0, 10);
@@ -142,7 +144,8 @@ Future<void> _backUp(BuildContext context, AppState state) async {
     await file.writeAsString(jsonEncode(await state.backup()));
     await SharePlus.instance.share(ShareParams(
         files: [XFile(file.path, mimeType: 'application/json')],
-        subject: 'Voice Notes backup $day'));
+        subject: 'Voice Notes backup $day',
+        sharePositionOrigin: origin));
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text('Could not back up: $e')));
   }
@@ -344,14 +347,16 @@ class SettingsPage extends StatelessWidget {
                 _row(context, Icons.key_outlined, 'API keys', keysStatus(s),
                     const _ApiKeysPage()),
                 const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.backup_outlined),
-                  title: const Text('Back up to a file'),
-                  subtitle: const Text(
-                      'Your notes, tags, dictionary and templates, to save in '
-                      'Google Drive, iCloud Drive or anywhere else. Not the '
-                      'recordings or API keys.'),
-                  onTap: () => _backUp(context, state),
+                Builder(
+                  builder: (tile) => ListTile(
+                    leading: const Icon(Icons.backup_outlined),
+                    title: const Text('Back up to a file'),
+                    subtitle: const Text(
+                        'Your notes, tags, dictionary and templates, to save '
+                        'in Google Drive, iCloud Drive or anywhere else. Not '
+                        'the recordings or API keys.'),
+                    onTap: () => _backUp(tile, state),
+                  ),
                 ),
                 const Divider(),
                 ListTile(

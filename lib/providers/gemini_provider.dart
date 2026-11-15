@@ -24,7 +24,7 @@ class GeminiProvider implements AiProvider {
     this.sttModel = 'gemini-3.5-flash',
     this.textModel = 'gemini-3.5-flash',
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? TimeoutClient();
 
   @override
   ProviderId get id => ProviderId.gemini;
