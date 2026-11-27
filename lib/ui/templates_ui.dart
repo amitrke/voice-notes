@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../data/app_state.dart';
 import '../data/templates.dart';
 import '../providers/ai_provider.dart';
+import 'sheet.dart';
 import 'stale_banner.dart';
 import 'theme.dart';
 
@@ -40,21 +41,16 @@ Future<TurnIntoChoice?> showTurnIntoSheet(
     BuildContext context, AppState state, Set<String> made) {
   final s = state.settings;
   final scheme = Theme.of(context).colorScheme;
-  return showModalBottomSheet<TurnIntoChoice>(
+  return showAppSheet<TurnIntoChoice>(
     context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
     builder: (sheet) => SafeArea(
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-              child: Text('Turn this note into',
-                  style: Theme.of(context).textTheme.titleMedium),
-            ),
+            const SheetHeader('Turn this note into',
+                padding: EdgeInsets.fromLTRB(24, 0, 12, 0)),
             for (final t in s.enabledTemplates)
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 24),

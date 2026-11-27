@@ -21,6 +21,7 @@ import 'format.dart';
 import 'share_origin.dart';
 import 'stale_banner.dart';
 import 'tags.dart';
+import 'sheet.dart';
 import 'templates_ui.dart';
 import 'text_size.dart';
 import 'theme.dart';
@@ -171,10 +172,8 @@ class _NotePageState extends State<NotePage> {
 
   /// Lets the user give each voice a name; "Speaker 1" until they do.
   Future<void> _nameSpeakers(AppState state, int noteId) async {
-    await showModalBottomSheet<void>(
+    await showAppSheet<void>(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
       builder: (sheet) => _SpeakerNames(noteId: noteId),
     );
   }
@@ -977,7 +976,7 @@ class _SpeakerNamesState extends State<_SpeakerNames> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Name the speakers',
+            SheetHeader('Name the speakers',
                 style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 4),
             Text(
