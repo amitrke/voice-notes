@@ -12,13 +12,13 @@ abstract final class GoogleConfig {
   /// "server client ID") even though the app has no server.
   static const webClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
-    defaultValue: '',
+    defaultValue: '641398618085-ddcnsegp3mtl51mu1jtgqvelbvmeh93u.apps.googleusercontent.com',
   );
 
   /// The *iOS* client. Its reversed form must also be a URL scheme in
   /// ios/Flutter/Google.xcconfig.
   static const iosClientId = String.fromEnvironment(
     'GOOGLE_IOS_CLIENT_ID',
-    defaultValue: '',
+    defaultValue: '641398618085-eetn9mijc9dpvelb2r1fk3jkh6e6bffd.apps.googleusercontent.com',
   );
 }
