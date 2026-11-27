@@ -263,7 +263,12 @@ Future<void> _chooseFolder(BuildContext context) async {
                         : 'A Voice Notes folder in your Drive. Works on '
                             'Android and iPhone.'),
             enabled: sync.driveAvailable,
-            onTap: () => Navigator.pop(sheet, 'drive'),
+            trailing: account != null && account.isNotEmpty
+                ? const Icon(Icons.check)
+                : null,
+            // Already in use and signed in: nothing to do.
+            onTap: () => Navigator.pop(
+                sheet, account != null && account.isNotEmpty ? null : 'drive'),
           ),
           if (account != null)
             ListTile(
@@ -278,10 +283,13 @@ Future<void> _chooseFolder(BuildContext context) async {
           ListTile(
             leading: const Icon(Icons.create_new_folder_outlined),
             title: const Text('Choose a folder…'),
-            subtitle: Text(Platform.isIOS
-                ? 'Any folder in Files, such as one in iCloud Drive'
-                : 'On this phone, or in a cloud storage app that offers '
-                    'folders'),
+            subtitle: Text([
+              Platform.isIOS
+                  ? 'Any folder in Files, such as one in iCloud Drive'
+                  : 'On this phone, or in a cloud storage app that offers '
+                      'folders',
+              if (account != null) 'Signs out of Google Drive.',
+            ].join('. ')),
             onTap: () => Navigator.pop(sheet, 'pick'),
           ),
           if (custom && account == null)

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -19,19 +20,27 @@ import 'package:voice_notes/services/drive_backup_folder.dart';
 
 /// One Google account's Drive, as the app sees it with drive.file.
 class _FakeDrive implements DriveFiles {
-  final folderIds = <String>[];
-  final names = <String, String>{}; // file id -> name
+  final folderIds = <String>[]; // the app's marked folders
+  final names = <String, String>{}; // id -> name
   final parents = <String, String>{}; // file id -> folder id
   final content = <String, String>{}; // file id -> text
+  final modified = <String, DateTime>{};
+  final trashed = <String>{}; // ids in the trash, files or folders
   var _next = 0;
   var creates = 0;
   var updates = 0;
+  var foldersFail = false;
 
   String _id() => 'id${_next++}';
 
+  bool _inTrash(String id) =>
+      trashed.contains(id) || trashed.contains(parents[id]);
+
   @override
-  Future<List<String>> folders(String name) async =>
-      [for (final id in folderIds) if (names[id] == name) id];
+  Future<List<String>> folders() async {
+    if (foldersFail) throw const SocketException('offline');
+    return [for (final id in folderIds) if (!trashed.contains(id)) id];
+  }
 
   @override
   Future<String> createFolder(String name) async {
@@ -44,7 +53,8 @@ class _FakeDrive implements DriveFiles {
   @override
   Future<List<DriveFile>> list(String folderId) async => [
     for (final e in parents.entries)
-      if (e.value == folderId) DriveFile(e.key, names[e.key]!, DateTime(2026)),
+      if (e.value == folderId && !_inTrash(e.key))
+        DriveFile(e.key, names[e.key]!, modified[e.key] ?? DateTime(2026)),
   ];
 
   @override
@@ -57,6 +67,7 @@ class _FakeDrive implements DriveFiles {
     return id;
   }
 
+  /// Like Drive, this happily updates a file in the trash.
   @override
   Future<void> update(String fileId, String text) async {
     if (!content.containsKey(fileId)) {
@@ -76,9 +87,11 @@ class _FakeDrive implements DriveFiles {
     content.remove(fileId);
   }
 
+  /// What the user sees in a folder, trash left out.
   Map<String, String> filesIn(String folderId) => {
     for (final e in parents.entries)
-      if (e.value == folderId) names[e.key]!: content[e.key]!,
+      if (e.value == folderId && !_inTrash(e.key))
+        names[e.key]!: content[e.key]!,
   };
 }
 
@@ -398,4 +411,170 @@ void main() {
       expect(calls, 0);
     });
   });
+
+  group('review fixes', () {
+    DriveBackupFolder folderOn(_FakeDrive d, _FakeAuth a) =>
+        DriveBackupFolder(a, d, phone: () async => (name: 'Pixel', id: '1'));
+
+    test('a backup the user trashed is written again, not into the trash',
+        () async {
+      final d = _FakeDrive();
+      final folder = folderOn(d, _FakeAuth(willSignInAs: 'me@example.com'));
+      await folder.pick();
+      await folder.write('a.json', 'one');
+      d.trashed.add(d.parents.keys.single);
+      await folder.write('a.json', 'two');
+      expect(d.filesIn(d.folderIds.single), {'a.json': 'two'});
+      expect((await folder.list()).single.name, 'a.json');
+      expect(await folder.read('a.json'), 'two');
+    });
+
+    test('a trashed backup folder is replaced, not written into', () async {
+      final d = _FakeDrive();
+      final folder = folderOn(d, _FakeAuth(willSignInAs: 'me@example.com'));
+      await folder.pick();
+      await folder.write('a.json', 'one');
+      d.trashed.add(d.folderIds.single);
+      await folder.write('a.json', 'two');
+      final live = d.folderIds.where((id) => !d.trashed.contains(id));
+      expect(d.filesIn(live.single), {'a.json': 'two'});
+    });
+
+    test('a renamed folder is still found, and every folder is listed',
+        () async {
+      final d = _FakeDrive();
+      // Two phones set up at the same moment: two folders.
+      final first = await d.createFolder('Voice Notes');
+      final second = await d.createFolder('Voice Notes');
+      d.names[first] = 'My backups'; // renamed by the user
+      await d.create(first, 'pixel.json', 'p');
+      await d.create(second, 'iphone.json', 'i');
+      await d.create(second, 'pixel.json', 'old');
+      d.modified[d.parents.keys.last] = DateTime(2025);
+
+      final folder = folderOn(d, _FakeAuth(willSignInAs: 'me@example.com'));
+      await folder.pick();
+      expect(d.folderIds, hasLength(2), reason: 'no third folder');
+      expect((await folder.list()).map((e) => e.name),
+          unorderedEquals(['pixel.json', 'iphone.json']));
+      expect(await folder.read('pixel.json'), 'p', reason: 'the newer one');
+      await folder.write('new.json', 'n');
+      expect(d.filesIn(first)['new.json'], 'n', reason: 'oldest folder');
+    });
+
+    test('if Drive cannot be reached after sign-in, it signs out again',
+        () async {
+      final d = _FakeDrive()..foldersFail = true;
+      final auth = _FakeAuth(willSignInAs: 'me@example.com');
+      final local = _PhoneFolder('Pixel');
+      final dest = destinations(local, auth, d);
+      await expectLater(
+          dest.useDrive(),
+          throwsA(isA<DriveUnreachable>().having((e) => '$e', 'message',
+              'Could not reach Google Drive. Try again.')));
+      expect(auth.account, isNull);
+      expect((await dest.location()).onDrive, isFalse);
+    });
+
+    test('a failed sign-in shows a plain message', () async {
+      final auth = _ThrowingAuth();
+      final folder = DriveBackupFolder(auth, _FakeDrive(),
+          phone: () async => (name: 'Pixel', id: '1'));
+      await expectLater(
+          folder.pick(),
+          throwsA(isA<DriveUnreachable>().having((e) => '$e', 'message',
+              'Could not sign in to Google. Try again.')));
+    });
+
+    test('leaving Drive for a folder on the phone signs out', () async {
+      final auth = _FakeAuth(willSignInAs: 'me@example.com');
+      final dest = destinations(_PhoneFolder('Pixel'), auth, _FakeDrive());
+      await dest.useDrive();
+      await dest.pick();
+      expect(auth.account, isNull);
+
+      await dest.useDrive();
+      await dest.reset();
+      expect(auth.account, isNull);
+    });
+
+    test('choosing a folder while not on Drive leaves Google alone', () async {
+      final auth = _FakeAuth(account: 'me@example.com');
+      final dest = destinations(_PhoneFolder('Pixel'), auth, _FakeDrive());
+      await dest.pick();
+      expect(auth.account, 'me@example.com');
+    });
+
+    test('signed out, backups do not keep asking Google to sign in', () async {
+      final platform = _FakePlatform();
+      GoogleSignInPlatform.instance = platform;
+      final auth = GoogleDriveAuth(webClientId: 'web', iosClientId: 'ios');
+      final folder = DriveBackupFolder(auth, GoogleDriveFiles(auth),
+          phone: () async => (name: 'Pixel', id: '1'));
+
+      expect((await folder.location()).account, isEmpty);
+      for (var i = 0; i < 3; i++) {
+        await expectLater(
+            folder.write('a.json', 'x'), throwsA(isA<DriveSignedOut>()));
+      }
+      expect(platform.lightweight, 1);
+
+      // Signing in, then out, still asks nothing more.
+      platform.user = const GoogleSignInUserData(email: 'me@example.com', id: '7');
+      expect(await auth.signIn(), 'me@example.com');
+      expect(await auth.restore(), 'me@example.com');
+      await auth.signOut();
+      expect(await auth.restore(), isNull);
+      expect(platform.lightweight, 1);
+    });
+  });
+}
+
+class _ThrowingAuth extends _FakeAuth {
+  @override
+  Future<String?> signIn() async =>
+      throw Exception('ApiException: 10: developer error');
+}
+
+/// The google_sign_in platform side, with nobody signed in at first.
+class _FakePlatform extends GoogleSignInPlatform {
+  GoogleSignInUserData? user;
+  var lightweight = 0;
+
+  AuthenticationResults? get _results => user == null
+      ? null
+      : AuthenticationResults(
+          user: user!,
+          authenticationTokens: const AuthenticationTokenData(idToken: 'id'),
+        );
+
+  @override
+  Future<void> init(InitParameters params) async {}
+  @override
+  Future<AuthenticationResults?> attemptLightweightAuthentication(
+      AttemptLightweightAuthenticationParameters params) async {
+    lightweight++;
+    return _results;
+  }
+
+  @override
+  bool supportsAuthenticate() => true;
+  @override
+  Future<AuthenticationResults> authenticate(
+          AuthenticateParameters params) async =>
+      _results!;
+  @override
+  bool authorizationRequiresUserInteraction() => false;
+  @override
+  Future<ClientAuthorizationTokenData?> clientAuthorizationTokensForScopes(
+          ClientAuthorizationTokensForScopesParameters params) async =>
+      user == null ? null : const ClientAuthorizationTokenData(accessToken: 't');
+  @override
+  Future<ServerAuthorizationTokenData?> serverAuthorizationTokensForScopes(
+          ServerAuthorizationTokensForScopesParameters params) async =>
+      null;
+  @override
+  Future<void> signOut(SignOutParams params) async => user = null;
+  @override
+  Future<void> disconnect(DisconnectParams params) async => user = null;
 }

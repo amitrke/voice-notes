@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
@@ -22,6 +23,17 @@ class DriveSignedOut implements Exception {
   @override
   String toString() => 'Signed out of Google Drive. Choose Google Drive '
       'again in "Backup folder" to sign in.';
+}
+
+/// Google sign-in or Drive failed while setting up. The message is for the
+/// user; the detail goes to the debug log.
+class DriveUnreachable implements Exception {
+  final String message;
+  const DriveUnreachable([
+    this.message = 'Could not reach Google Drive. Try again.',
+  ]);
+  @override
+  String toString() => message;
 }
 
 /// Signing in to Google and getting a token for [driveFileScope].
@@ -49,27 +61,46 @@ abstract class DriveAuth {
 
 /// [DriveAuth] using the google_sign_in plugin.
 class GoogleDriveAuth implements DriveAuth {
+  final String webClientId;
+  final String iosClientId;
+
+  GoogleDriveAuth({
+    this.webClientId = GoogleConfig.webClientId,
+    this.iosClientId = GoogleConfig.iosClientId,
+  });
+
   GoogleSignIn get _g => GoogleSignIn.instance;
   Future<void>? _init;
   GoogleSignInAccount? _account;
 
+  /// The one quiet sign-in attempt of this run of the app. Its result,
+  /// signed out included, stands until the user signs in or out: asking the
+  /// platform again on every backup could show Android's sign-in sheet
+  /// over and over.
+  Future<void>? _restored;
+
   @override
   bool get available =>
-      GoogleConfig.webClientId.isNotEmpty &&
-      (!Platform.isIOS || GoogleConfig.iosClientId.isNotEmpty);
+      webClientId.isNotEmpty && (!Platform.isIOS || iosClientId.isNotEmpty);
 
   Future<void> _ready() {
     if (!available) throw StateError('Google Drive is not set up in this build.');
     return _init ??= _g.initialize(
-      clientId: Platform.isIOS ? GoogleConfig.iosClientId : null,
-      serverClientId: GoogleConfig.webClientId,
+      clientId: Platform.isIOS ? iosClientId : null,
+      serverClientId: webClientId,
     );
   }
 
   @override
   Future<String?> restore() async {
     await _ready();
-    _account ??= await _g.attemptLightweightAuthentication();
+    await (_restored ??= () async {
+      try {
+        _account = await _g.attemptLightweightAuthentication();
+      } catch (_) {
+        _account = null;
+      }
+    }());
     return _account?.email;
   }
 
@@ -80,6 +111,7 @@ class GoogleDriveAuth implements DriveAuth {
       final account = await _g.authenticate(scopeHint: const [driveFileScope]);
       await account.authorizationClient.authorizeScopes(const [driveFileScope]);
       _account = account;
+      _restored = Future.value();
       return account.email;
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) return null;
@@ -91,6 +123,7 @@ class GoogleDriveAuth implements DriveAuth {
   Future<void> signOut() async {
     await _ready();
     _account = null;
+    _restored = Future.value();
     await _g.signOut();
   }
 
@@ -100,7 +133,11 @@ class GoogleDriveAuth implements DriveAuth {
     final auth = await _account!.authorizationClient.authorizationForScopes(
       const [driveFileScope],
     );
-    if (auth == null) throw const DriveSignedOut();
+    if (auth == null) {
+      // Access was removed: signed out until the user signs in again.
+      _account = null;
+      throw const DriveSignedOut();
+    }
     return auth.accessToken;
   }
 
@@ -119,8 +156,13 @@ class DriveFile {
 
 /// The few Drive calls backups need. Split out so tests can fake Drive.
 abstract class DriveFiles {
-  /// Folders named [name] the app can see, oldest first.
-  Future<List<String>> folders(String name);
+  /// The app's backup folders, oldest first, whatever the user renamed them
+  /// to or moved them into. Usually one; two phones setting up at the same
+  /// moment can make two.
+  Future<List<String>> folders();
+
+  /// Makes a backup folder called [name] in My Drive, marked so [folders]
+  /// finds it.
   Future<String> createFolder(String name);
   Future<List<DriveFile>> list(String folderId);
   /// Returns the new file's id.
@@ -160,11 +202,14 @@ class GoogleDriveFiles implements DriveFiles {
   static String _quote(String s) =>
       "'${s.replaceAll(r'\', r'\\').replaceAll("'", r"\'")}'";
 
+  /// Marks the app's backup folder, so it is found after a rename or move.
+  static const _marker = {'voiceNotesBackups': '1'};
+
   @override
-  Future<List<String>> folders(String name) => _drive((api) async {
+  Future<List<String>> folders() => _drive((api) async {
     final r = await api.files.list(
-      q: "mimeType = '$_folderType' and name = ${_quote(name)} "
-          'and trashed = false',
+      q: "mimeType = '$_folderType' and trashed = false and appProperties "
+          "has { key = 'voiceNotesBackups' and value = '1' }",
       orderBy: 'createdTime',
       spaces: 'drive',
       $fields: 'files(id)',
@@ -175,7 +220,7 @@ class GoogleDriveFiles implements DriveFiles {
   @override
   Future<String> createFolder(String name) => _drive((api) async {
     final f = await api.files.create(
-      drive.File(name: name, mimeType: _folderType),
+      drive.File(name: name, mimeType: _folderType, appProperties: _marker),
       $fields: 'id',
     );
     return f.id!;
@@ -266,7 +311,7 @@ class DriveBackupFolder implements BackupFolder {
 
   static const folderName = 'Voice Notes';
 
-  String? _folderId;
+  /// File ids by name, from the last [list].
   final _ids = <String, String>{};
 
   FolderInfo _info(String? email) => email == null
@@ -286,44 +331,57 @@ class DriveBackupFolder implements BackupFolder {
     return _info(email);
   }
 
-  /// Signs in. Null when the user cancels.
+  /// Signs in and finds or makes the backup folder. Null when the user
+  /// cancels. If Drive cannot be reached, signs out again, so nothing is
+  /// left half set up.
   @override
   Future<FolderInfo?> pick() async {
-    final email = await auth.signIn();
+    final String? email;
+    try {
+      email = await auth.signIn();
+    } catch (e) {
+      debugPrint('Google sign-in failed: $e');
+      throw const DriveUnreachable('Could not sign in to Google. Try again.');
+    }
     if (email == null) return null;
-    _folderId = null;
     _ids.clear();
-    await _folder();
+    try {
+      await _folders();
+    } catch (e) {
+      debugPrint('Google Drive unreachable: $e');
+      try {
+        await auth.signOut();
+      } catch (_) {}
+      throw const DriveUnreachable();
+    }
     return _info(email);
   }
 
   /// Signs out of Google.
   @override
   Future<FolderInfo> reset() async {
-    _folderId = null;
     _ids.clear();
     await auth.signOut();
     return _info(null);
   }
 
-  Future<String> _folder() async {
+  /// The backup folders, oldest first; makes one if there is none. Asked of
+  /// Drive each time, so a folder the user trashed is not written into.
+  Future<List<String>> _folders() async {
     if (await auth.restore() == null) throw const DriveSignedOut();
-    if (_folderId != null) return _folderId!;
-    final found = await files.folders(folderName);
-    return _folderId =
-        found.isNotEmpty ? found.first : await files.createFolder(folderName);
+    final found = await files.folders();
+    return found.isNotEmpty ? found : [await files.createFolder(folderName)];
   }
 
   @override
   Future<void> write(String name, String text) async {
-    final folder = await _folder();
-    var id = _ids[name];
+    // Looked up afresh each time: Drive lets the app update a file the user
+    // trashed, and the backup would then go to the trash with it.
+    final folders = await _folders();
+    await _list(folders);
+    final id = _ids[name];
     if (id == null) {
-      await list();
-      id = _ids[name];
-    }
-    if (id == null) {
-      _ids[name] = await files.create(folder, name, text);
+      _ids[name] = await files.create(folders.first, name, text);
       return;
     }
     try {
@@ -331,18 +389,31 @@ class DriveBackupFolder implements BackupFolder {
     } on drive.DetailedApiRequestError catch (e) {
       // Deleted in Drive since: make it again.
       if (e.status != 404) rethrow;
-      _ids[name] = await files.create(folder, name, text);
+      _ids[name] = await files.create(folders.first, name, text);
     }
   }
 
-  @override
-  Future<List<BackupEntry>> list() async {
-    final found = await files.list(await _folder());
+  /// Every backup in every backup folder. Where two folders hold a file of
+  /// the same name, the newer one counts.
+  Future<List<DriveFile>> _list(List<String> folders) async {
+    final byName = <String, DriveFile>{};
+    for (final folder in folders) {
+      for (final f in await files.list(folder)) {
+        final had = byName[f.name];
+        if (had == null || f.modified.isAfter(had.modified)) byName[f.name] = f;
+      }
+    }
     _ids
       ..clear()
-      ..addEntries([for (final f in found) MapEntry(f.name, f.id)]);
-    return [for (final f in found) BackupEntry(f.name, f.modified)];
+      ..addEntries([for (final f in byName.values) MapEntry(f.name, f.id)]);
+    return byName.values.toList();
   }
+
+  @override
+  Future<List<BackupEntry>> list() async => [
+    for (final f in await _list(await _folders()))
+      BackupEntry(f.name, f.modified),
+  ];
 
   @override
   Future<String> read(String name) async {
@@ -405,17 +476,30 @@ class BackupDestinations implements BackupFolder {
   @override
   Future<FolderInfo> location() async => (await _current).location();
 
+  /// Leaves Google Drive, signing out so the app does not stay signed in
+  /// to an account it no longer uses.
+  Future<void> _leaveDrive() async {
+    if (await _isDrive) {
+      try {
+        await drive.reset();
+      } catch (e) {
+        debugPrint('Google sign-out failed: $e');
+      }
+    }
+    await _set(false);
+  }
+
   /// Picks a folder on the phone (leaving Google Drive, if it was in use).
   @override
   Future<FolderInfo?> pick() async {
     final info = await folder.pick();
-    if (info != null) await _set(false);
+    if (info != null) await _leaveDrive();
     return info;
   }
 
   @override
   Future<FolderInfo> reset() async {
-    await _set(false);
+    await _leaveDrive();
     return folder.reset();
   }
 

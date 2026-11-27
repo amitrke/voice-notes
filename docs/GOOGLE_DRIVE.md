@@ -110,8 +110,15 @@ Client IDs are not secrets (they ship in every copy of the app), so they are com
   (one file per phone, debounced, restore list) is unchanged.
 - `BackupDestinations` switches between the folder on the phone and Drive and remembers the choice in
   SharedPreferences (`backupDestination`).
-- On first use it looks for a "Voice Notes" folder the app can see (made by this phone or another one on
-  the same account) and creates one if there is none.
+- The backup folder carries an `appProperties` marker (`voiceNotesBackups=1`), so the app still finds it
+  after the user renames or moves it. On first use the app looks for a marked folder, made by this phone or
+  another one on the same account, and creates one if there is none. If two phones set up at the same moment
+  and make two folders, restore lists both, and new files go to the older one.
+- Before each write the app lists the folder again, so a file or folder the user trashed is replaced, not
+  written into the trash.
+- It tries Google's quiet sign-in once per run of the app. If that finds no account, the app stays signed
+  out until the user chooses Google Drive again, so backups do not keep bringing up the sign-in sheet.
+- Leaving Drive, for a folder on the phone or by signing out, signs the app out of Google.
 - Tokens come from the platform's sign-in SDK each time and are never stored by the app. On a 401 the
   token is discarded and the call is retried once. If the user has signed out or removed access, the
   backup status says so, and choosing Google Drive again signs them in.
