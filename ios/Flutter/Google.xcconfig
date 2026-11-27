@@ -1,0 +1,5 @@
+// Google sign-in for backing up to Google Drive (docs/GOOGLE_DRIVE.md).
+// The reversed iOS OAuth client ID: com.googleusercontent.apps.<the part of
+// the client ID before ".apps.googleusercontent.com">. Not a secret.
+// Info.plist registers it as a URL scheme so Google can return to the app.
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.not-configured

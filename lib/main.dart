@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'data/app_state.dart';
+import 'data/backup_sync.dart';
 import 'data/notes_db.dart';
 import 'data/settings_store.dart';
+import 'services/backup_folder.dart';
+import 'services/drive_backup_folder.dart';
 import 'services/share_intake.dart';
 import 'ui/home_page.dart';
 import 'ui/setup_page.dart';
@@ -33,11 +36,24 @@ Future<void> main() async {
   unawaited(ShareIntake(
     onFile: (path) async => state.addAudio(await state.importFile(path)),
   ).start());
+  // Keeps this phone's backup in the backup folder (or Google Drive) up to
+  // date.
+  final native = NativeBackupFolder();
+  final auth = GoogleDriveAuth();
+  final backup = BackupSync(
+    state,
+    BackupDestinations(
+      native,
+      DriveBackupFolder(auth, GoogleDriveFiles(auth), phone: native.device),
+    ),
+  );
+  unawaited(backup.start());
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: state),
         ChangeNotifierProvider.value(value: settings.models),
+        ChangeNotifierProvider.value(value: backup),
       ],
       child: VoiceNotesApp(showSetup: showSetup),
     ),

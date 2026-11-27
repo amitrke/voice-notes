@@ -3,6 +3,8 @@ import UIKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private let backupFolder = BackupFolder()
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -12,6 +14,14 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "BackupFolder") {
+      let backup = FlutterMethodChannel(
+        name: "com.subnext.voicenotes/backup", binaryMessenger: registrar.messenger())
+      backup.setMethodCallHandler { [backupFolder] call, result in
+        backupFolder.handle(call, result: result)
+      }
+    }
 
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "AudioConverter") {
       let channel = FlutterMethodChannel(

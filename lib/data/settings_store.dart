@@ -54,6 +54,9 @@ class SettingsStore {
 
   /// The first-run setup was finished or skipped.
   bool setupDone = false;
+
+  /// Keep this phone's backup file in the backup folder up to date.
+  bool autoBackup = true;
   double textScale = defaultTextScale;
 
   /// Ids of the built-in templates offered under "Turn into…". The user's
@@ -121,6 +124,7 @@ class SettingsStore {
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
     setupDone = _prefs.getBool('setupDone') ?? false;
+    autoBackup = _prefs.getBool('autoBackup') ?? true;
     // Before templates, clinical notes came from a use case setting, and
     // before that from a plain on/off switch.
     final useCase = _prefs.getString('useCase');
@@ -318,6 +322,11 @@ class SettingsStore {
   Future<void> setSetupDone() async {
     setupDone = true;
     await _prefs.setBool('setupDone', true);
+  }
+
+  Future<void> setAutoBackup(bool v) async {
+    autoBackup = v;
+    await _prefs.setBool('autoBackup', v);
   }
 
   Future<void> setDeleteAudioAfter(bool v) async {

@@ -86,6 +86,9 @@ clinical work before). Output is an AI-generated draft and must be reviewed by a
   is excluded from iCloud backup. The voiceprint is kept in secure storage,
   this device only. Settings > "Back up to a file" exports notes, tags,
   dictionary and templates as JSON; "Restore from a file" merges them in.
+- Automatic backups can also go to Google Drive (`drive.file` scope, a visible
+  "Voice Notes" folder), which Android phones and iPhones share. It needs
+  one-time Google Cloud setup: see [docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md).
 
 ## Run
 
