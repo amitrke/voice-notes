@@ -5,6 +5,7 @@ import '../data/app_state.dart';
 import '../data/find_replace.dart';
 import '../models/note.dart';
 import '../providers/ai_provider.dart';
+import '../services/model_store.dart';
 import 'ask_page.dart';
 import 'audio_input.dart';
 import 'folders.dart';
@@ -89,9 +90,17 @@ class HomePage extends StatelessWidget {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: _KeyBanner(
-                    offline: state.settings.active == ProviderId.onDevice,
-                    onOpen: () => _openSettings(context)),
+                child: state.settings.active == ProviderId.onDevice
+                    // Rebuilds on download progress, which AppState does not
+                    // report.
+                    ? ListenableBuilder(
+                        listenable: state.settings.models,
+                        builder: (context, _) => _KeyBanner(
+                            offline: true,
+                            models: state.settings.models,
+                            onOpen: () => _openSettings(context)),
+                      )
+                    : _KeyBanner(onOpen: () => _openSettings(context)),
               ),
             ),
           if (state.hasAnyNotes)
@@ -211,11 +220,17 @@ class _KeyBanner extends StatelessWidget {
 
   /// On-device transcription needs a model rather than a key.
   final bool offline;
-  const _KeyBanner({required this.onOpen, this.offline = false});
+
+  /// The offline models, to show a download in progress or one that failed.
+  final ModelStore? models;
+  const _KeyBanner({required this.onOpen, this.offline = false, this.models});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final m = offline ? models : null;
+    final downloading = m?.downloading != null;
+    final failed = m?.error;
     return Card(
       color: scheme.primaryContainer,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -231,7 +246,13 @@ class _KeyBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    offline
+                    downloading
+                        ? 'Downloading the offline model: '
+                            '${(m!.progress * 100).round()}%. Recordings are '
+                            'transcribed when it finishes.'
+                        : failed != null
+                        ? 'The offline model did not download. $failed'
+                        : offline
                         ? 'Download an offline model in Settings to start '
                             'transcribing without internet.'
                         : 'Add an API key to start transcribing. Your key stays on this device.',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -32,7 +33,25 @@ class AppState extends ChangeNotifier {
       if (settings.offlineModel == ready) return;
       ready = settings.offlineModel;
       notifyListeners();
+      // Recordings made while the model was downloading can go now.
+      if (ready != null) unawaited(retryNotReady());
     });
+  }
+
+  /// Retries every recording that failed only because no provider was set
+  /// up yet ([_noModelError], [_noKeyError]), once the active one is ready.
+  /// Called when a model download finishes and when setup saves a key.
+  Future<void> retryNotReady() async {
+    if (!settings.isReady(settings.active)) return;
+    bool notReady(String? e) =>
+        e == _noModelError || ProviderId.values.any((p) => e == _noKeyError(p));
+    for (final n in _notes.toList()) {
+      for (final s in n.segments) {
+        if (s.status == NoteStatus.failed && s.hasAudio && notReady(s.error)) {
+          await retrySegment(n.id!, s.id!);
+        }
+      }
+    }
   }
 
   List<Note> _notes = [];
@@ -546,8 +565,8 @@ class AppState extends ChangeNotifier {
           (s) => s.copyWith(
               status: NoteStatus.failed,
               error: providerId.needsKey
-                  ? 'Add your ${providerId.label} API key in Settings, then retry.'
-                  : 'Download an offline model in Settings, then retry.'));
+                  ? _noKeyError(providerId)
+                  : _noModelError));
       await _afterTranscription(noteId);
       return;
     }
@@ -1023,6 +1042,13 @@ class AppState extends ChangeNotifier {
     return e.toString();
   }
 }
+
+/// Why a recording failed when no model was downloaded yet.
+const _noModelError = 'Download an offline model in Settings, then retry.';
+
+/// Why a recording failed when [id] had no key yet.
+String _noKeyError(ProviderId id) =>
+    'Add your ${id.label} API key in Settings, then retry.';
 
 /// Marks a file made by [AppState.backup].
 const backupFormat = 'voice-notes-backup';

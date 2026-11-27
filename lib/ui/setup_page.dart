@@ -80,9 +80,12 @@ class _SetupPageState extends State<SetupPage> {
   }
 
   Future<void> _saveKey() async {
-    final s = context.read<AppState>().settings;
+    final state = context.read<AppState>();
+    final s = state.settings;
     await s.setApiKey(_provider, _key.text.trim());
     await s.setActive(_provider);
+    // Audio shared into the app before setup failed for want of a key.
+    unawaited(state.retryNotReady());
     await _finish();
   }
 
@@ -98,6 +101,18 @@ class _SetupPageState extends State<SetupPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Android's back gesture leaves the key step for the first question,
+    // instead of closing the app.
+    return PopScope(
+      canPop: _step != _Step.key,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _step = _Step.choose);
+      },
+      child: _page(context),
+    );
+  }
+
+  Widget _page(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         leading: _step == _Step.key

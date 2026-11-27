@@ -26,6 +26,9 @@ Future<void> main() async {
     runApp(_StartupError('$e'));
     return;
   }
+  // Decided before shared audio can add a note, so opening the app for the
+  // first time by sharing a file into it still shows the setup.
+  final showSetup = needsFirstRunSetup(state);
   // Audio shared from other apps becomes a new note.
   unawaited(ShareIntake(
     onFile: (path) async => state.addAudio(await state.importFile(path)),
@@ -36,7 +39,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: state),
         ChangeNotifierProvider.value(value: settings.models),
       ],
-      child: VoiceNotesApp(showSetup: needsFirstRunSetup(state)),
+      child: VoiceNotesApp(showSetup: showSetup),
     ),
   );
 }

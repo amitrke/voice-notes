@@ -19,6 +19,45 @@ import 'package:voice_notes/ui/home_page.dart';
 import 'package:voice_notes/ui/setup_page.dart';
 import 'package:voice_notes/ui/theme.dart';
 
+/// Counts transcriptions; every one succeeds.
+class _Provider implements AiProvider {
+  int calls = 0;
+
+  @override
+  ProviderId get id => ProviderId.gemini;
+  @override
+  RecordingFormat get recordingFormat => RecordingFormat.m4a;
+
+  @override
+  Future<Transcription> transcribe(File audio,
+      {required bool translate,
+      List<String> vocabulary = const [],
+      bool speakers = false}) async {
+    calls++;
+    return const Transcription(text: 'hello there', languageCode: 'en');
+  }
+
+  @override
+  Future<NoteSummary> summarize(String text,
+          {List<String> tags = const []}) async =>
+      NoteSummary('Title', 'Summary');
+
+  @override
+  Future<String> completeJson(String prompt) async => '{}';
+}
+
+/// Not set up until [ready] is turned on.
+class _Unready extends SettingsStore {
+  final _Provider provider;
+  bool ready = false;
+  _Unready(this.provider);
+
+  @override
+  bool isReady(ProviderId id) => ready;
+  @override
+  AiProvider? build(ProviderId id) => ready ? provider : null;
+}
+
 void main() {
   sqfliteFfiInit();
   late Directory tmp;
@@ -81,6 +120,64 @@ void main() {
     });
   });
 
+  group('recordings made before setup', () {
+    late Directory dir;
+    setUp(() async {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+      dir = await Directory.systemTemp.createTemp('unready');
+    });
+    tearDown(() async {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    });
+
+    test('are transcribed once a key or model is ready, others are not',
+        () async {
+      final provider = _Provider();
+      final settings = _Unready(provider);
+      await settings.load();
+      settings.autoSummary = false;
+      final notesDb = await NotesDb.open(
+          path: p.join(dir.path, 'u.db'), factory: databaseFactoryFfi);
+      addTearDown(notesDb.close);
+      final s = AppState(settings, notesDb);
+      await s.init();
+      final audio = File(p.join(dir.path, 'early.m4a'))..writeAsStringSync('x');
+
+      final early = await s.addAudio(audio.path);
+      await s.settled();
+      final failed = s.byId(early.id!)!.segments.single;
+      expect(failed.status, NoteStatus.failed);
+      expect(failed.error, contains('API key in Settings'));
+
+      // Still nothing set up: nothing to retry with.
+      await s.retryNotReady();
+      await s.settled();
+      expect(provider.calls, 0);
+
+      settings.ready = true;
+      // Failed for another reason: left for the user to retry.
+      final other = await s.addAudio(audio.path);
+      await s.settled();
+      await notesDb.saveSegment(s
+          .byId(other.id!)!
+          .segments
+          .single
+          .copyWith(status: NoteStatus.failed, error: 'No luck.'));
+      await s.init();
+      provider.calls = 0;
+
+      await s.retryNotReady();
+      await s.settled();
+      expect(provider.calls, 1);
+      expect(s.byId(early.id!)!.segments.single.status, NoteStatus.done);
+      expect(s.byId(early.id!)!.segments.single.transcript, 'hello there');
+      expect(s.byId(other.id!)!.segments.single.status, NoteStatus.failed);
+    });
+  });
+
   group('SetupPage', () {
     Future<void> open(WidgetTester tester) async {
       await tester.runAsync(fresh);
@@ -122,6 +219,19 @@ void main() {
       expect(find.byType(HomePage), findsOneWidget);
     });
 
+    testWidgets('Android back on the key step returns to the question',
+        (tester) async {
+      await open(tester);
+      await tester.tap(find.byKey(const ValueKey('setup_key')));
+      await tester.pumpAndSettle();
+      expect(find.text('Add your AI key'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Welcome to Voice Notes'), findsOneWidget);
+      expect(find.byType(SetupPage), findsOneWidget);
+    });
+
     testWidgets('skipping goes to the notes and does not ask again',
         (tester) async {
       await open(tester);
@@ -159,6 +269,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(s.setupDone, isTrue);
       expect(find.byType(HomePage), findsOneWidget);
+      expect(find.textContaining('The offline model did not download'),
+          findsOneWidget,
+          reason: 'the failure is still shown after leaving setup');
     });
   });
 }
