@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/app_state.dart';
+import '../data/backup_sync.dart';
 import '../data/settings_store.dart';
 import '../providers/ai_provider.dart';
 import '../providers/voice_match.dart';
@@ -151,14 +152,152 @@ Future<void> _backUp(BuildContext context, AppState state) async {
   }
 }
 
-/// Picks a backup file and adds its notes to this phone.
-Future<void> _restore(BuildContext context, AppState state) async {
-  final messenger = ScaffoldMessenger.of(context);
+/// Picks a backup file anywhere and adds its notes to this phone.
+Future<void> _restoreFile(
+    ScaffoldMessengerState messenger, AppState state) async {
   final picked = await FilePicker.pickFile(type: FileType.any);
   final path = picked?.path;
   if (path == null) return;
+  Object? data;
   try {
-    final data = jsonDecode(await File(path).readAsString());
+    data = jsonDecode(await File(path).readAsString());
+  } catch (_) {
+    data = null;
+  }
+  await _restoreFrom(messenger, state, data);
+}
+
+/// Lists the backups in the backup folder, from every phone, to restore one.
+Future<void> _restore(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final sync = context.read<BackupSync>();
+  final found = sync.backups();
+  final choice = await showModalBottomSheet<Object>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: FutureBuilder<List<FoundBackup>>(
+        future: found,
+        builder: (sheet, snap) {
+          final list = snap.data ?? const <FoundBackup>[];
+          return ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Text(
+                    'Restore from ${sync.info?.label ?? 'the backup folder'}',
+                    style: Theme.of(sheet).textTheme.titleMedium),
+              ),
+              if (snap.connectionState != ConnectionState.done)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (snap.hasError)
+                ListTile(
+                    title: const Text('Could not read the backup folder'),
+                    subtitle: Text('${snap.error}'))
+              else if (list.isEmpty)
+                const ListTile(
+                    title: Text('No backups in this folder yet'),
+                    subtitle: Text(
+                        'Backups from your other phones appear here once they '
+                        'use the same folder.'))
+              else
+                for (final b in list)
+                  ListTile(
+                    leading: Icon(b.mine
+                        ? Icons.smartphone
+                        : Icons.devices_other_outlined),
+                    title:
+                        Text(b.mine ? '${b.device} (this phone)' : b.device),
+                    subtitle: Text(
+                        '${b.notes} ${b.notes == 1 ? 'note' : 'notes'} · '
+                        '${MaterialLocalizations.of(sheet).formatMediumDate(b.made)} '
+                        '${TimeOfDay.fromDateTime(b.made).format(sheet)}'),
+                    onTap: () => Navigator.pop(sheet, b),
+                  ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.folder_open_outlined),
+                title: const Text('Choose a file…'),
+                subtitle: const Text('A backup saved somewhere else'),
+                onTap: () => Navigator.pop(sheet, 'file'),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+  if (choice is FoundBackup) {
+    await _restoreFrom(messenger, state, choice.data);
+  } else if (choice == 'file') {
+    await _restoreFile(messenger, state);
+  }
+}
+
+/// Lets the user move backups to another folder, or back to the default.
+Future<void> _chooseFolder(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final sync = context.read<BackupSync>();
+  final custom = sync.info?.custom ?? false;
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.create_new_folder_outlined),
+            title: const Text('Choose a folder…'),
+            subtitle: Text(Platform.isIOS
+                ? 'Any folder in Files, such as one in iCloud Drive'
+                : 'On this phone, or in a cloud storage app that offers '
+                    'folders'),
+            onTap: () => Navigator.pop(sheet, 'pick'),
+          ),
+          if (custom)
+            ListTile(
+              leading: const Icon(Icons.restore),
+              title: const Text('Use the default folder'),
+              subtitle: Text(Platform.isIOS
+                  ? 'iCloud Drive › Voice Notes'
+                  : 'Documents › Voice Notes'),
+              onTap: () => Navigator.pop(sheet, 'reset'),
+            ),
+        ],
+      ),
+    ),
+  );
+  try {
+    if (choice == 'pick') {
+      await sync.pickFolder();
+    } else if (choice == 'reset') {
+      await sync.useDefaultFolder();
+    }
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('$e')));
+  }
+}
+
+String _backupStatus(BuildContext context, BackupSync sync, bool on) {
+  if (sync.error != null) return sync.error!;
+  if (!on) return 'Off. Use "Share a backup file" to back up by hand.';
+  final saved = sync.lastSaved;
+  final when = saved == null
+      ? 'After your next change'
+      : 'Saved at ${TimeOfDay.fromDateTime(saved).format(context)}';
+  return '$when. Your notes, tags, dictionary and templates; not the '
+      'recordings or API keys.';
+}
+
+/// Adds the notes in [data] (a backup) to this phone and says how it went.
+Future<void> _restoreFrom(
+    ScaffoldMessengerState messenger, AppState state, Object? data) async {
+  try {
     if (data is! Map) throw const FormatException();
     final added = await state.restore(Map<String, Object?>.from(data));
     messenger.showSnackBar(SnackBar(
@@ -347,24 +486,60 @@ class SettingsPage extends StatelessWidget {
                 _row(context, Icons.key_outlined, 'API keys', keysStatus(s),
                     const _ApiKeysPage()),
                 const Divider(),
-                Builder(
-                  builder: (tile) => ListTile(
-                    leading: const Icon(Icons.backup_outlined),
-                    title: const Text('Back up to a file'),
-                    subtitle: const Text(
-                        'Your notes, tags, dictionary and templates, to save '
-                        'in Google Drive, iCloud Drive or anywhere else. Not '
-                        'the recordings or API keys.'),
-                    onTap: () => _backUp(tile, state),
-                  ),
-                ),
+                Builder(builder: (tile) {
+                  final sync = tile.watch<BackupSync>();
+                  final info = sync.info;
+                  return Column(
+                    children: [
+                      SwitchListTile(
+                        secondary: const Icon(Icons.cloud_sync_outlined),
+                        title: const Text('Back up automatically'),
+                        subtitle:
+                            Text(_backupStatus(tile, sync, s.autoBackup)),
+                        value: s.autoBackup,
+                        onChanged: (v) async {
+                          await sync.setAuto(v);
+                          state.refresh();
+                        },
+                      ),
+                      const Divider(),
+                      ListTile(
+                        leading: const Icon(Icons.folder_outlined),
+                        title: const Text('Backup folder'),
+                        subtitle: Text([
+                          info?.label ?? '…',
+                          if (info != null && !info.syncs)
+                            Platform.isIOS
+                                ? 'Choose a folder in iCloud Drive to reach '
+                                    'your other devices.'
+                                : 'To reach your other devices, choose a '
+                                    'folder in a cloud storage app. Android '
+                                    'also keeps your notes in its own backup '
+                                    'to Google.',
+                        ].join('\n')),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => _chooseFolder(tile),
+                      ),
+                    ],
+                  );
+                }),
                 const Divider(),
                 ListTile(
                   leading: const Icon(Icons.settings_backup_restore),
-                  title: const Text('Restore from a file'),
+                  title: const Text('Restore'),
                   subtitle: const Text(
                       'Adds the notes from a backup to the ones on this phone.'),
                   onTap: () => _restore(context, state),
+                ),
+                const Divider(),
+                Builder(
+                  builder: (tile) => ListTile(
+                    leading: const Icon(Icons.ios_share),
+                    title: const Text('Share a backup file'),
+                    subtitle: const Text('Send a copy anywhere: Google Drive, '
+                        'email or another app.'),
+                    onTap: () => _backUp(tile, state),
+                  ),
                 ),
               ],
             ),
