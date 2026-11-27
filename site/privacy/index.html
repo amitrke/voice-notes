@@ -11,7 +11,7 @@
 <main>
   <h1>Privacy Policy</h1>
   <p class="lead">Voice Notes (listed as "Basic Voice Notes" on the App Store) records or imports voice notes, turns them into text, translates them to English and summarises them. We run no servers and collect nothing about you. Your notes stay on your device, and your audio goes only to the AI provider you choose, using your own API key.</p>
-  <p class="muted">Effective date: 8 October 2026. Developer: Amit Kumar.</p>
+  <p class="muted">Effective date: 8 October 2026. Updated 27 November 2026 (backups and Google Drive). Developer: Amit Kumar.</p>
 
   <div class="card">
     <h2>What the app stores on your device</h2>
@@ -39,11 +39,18 @@
   </div>
 
   <div class="card">
+    <h2>Backups</h2>
+    <p>If "Back up automatically" is on, the app writes a backup file of your notes, tags, dictionary and templates (not recordings or API keys) to the backup folder you chose: iCloud Drive or a folder on the phone by default, or another folder you pick. That folder's own service, such as iCloud, may copy it to your other devices.</p>
+    <p>If you choose <strong>Google Drive</strong>, you sign in with your Google account and the app asks for the <code>drive.file</code> permission. This lets it create a "Voice Notes" folder in your Drive and read and write only the files it created there; it cannot see your other Drive files. The backup goes directly from your device to Google; we do not receive a copy. Sign out under Settings › Backup folder, or remove the app's access in your Google Account settings. The backups stay in your Drive until you delete them.</p>
+    <p>The app's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements. It is used only to store and restore your own backups, and is not used for advertising, sold, or shared.</p>
+  </div>
+
+  <div class="card">
     <h2>What we do not do</h2>
     <ul>
       <li>We do not collect, store, sell or share your personal information.</li>
       <li>We do not use analytics, advertising or tracking SDKs.</li>
-      <li>We do not require you to create an account.</li>
+      <li>We do not require you to create an account. A Google account is needed only if you choose to back up to Google Drive.</li>
       <li>We do not access your contacts, location, photos or other files. The app asks for microphone access to record, and reads only the audio files you choose to import.</li>
     </ul>
   </div>
