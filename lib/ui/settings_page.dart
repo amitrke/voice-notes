@@ -243,6 +243,7 @@ Future<void> _chooseFolder(BuildContext context) async {
   final messenger = ScaffoldMessenger.of(context);
   final sync = context.read<BackupSync>();
   final custom = sync.info?.custom ?? false;
+  final account = sync.info?.account;
   final choice = await showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
@@ -250,6 +251,30 @@ Future<void> _chooseFolder(BuildContext context) async {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          ListTile(
+            leading: const Icon(Icons.add_to_drive_outlined),
+            title: const Text('Google Drive'),
+            subtitle: Text(!sync.driveAvailable
+                ? 'Not available in this version of the app yet'
+                : account != null && account.isNotEmpty
+                    ? 'In use, signed in as $account'
+                    : account != null
+                        ? 'Signed out. Tap to sign in again.'
+                        : 'A Voice Notes folder in your Drive. Works on '
+                            'Android and iPhone.'),
+            enabled: sync.driveAvailable,
+            onTap: () => Navigator.pop(sheet, 'drive'),
+          ),
+          if (account != null)
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Sign out of Google Drive'),
+              subtitle: Text(
+                  'Backups go to ${Platform.isIOS ? 'iCloud Drive' : 'a folder '
+                      'on this phone'} again. The ones in Drive stay there.'),
+              onTap: () => Navigator.pop(sheet, 'signout'),
+            ),
+          const Divider(),
           ListTile(
             leading: const Icon(Icons.create_new_folder_outlined),
             title: const Text('Choose a folder…'),
@@ -259,7 +284,7 @@ Future<void> _chooseFolder(BuildContext context) async {
                     'folders'),
             onTap: () => Navigator.pop(sheet, 'pick'),
           ),
-          if (custom)
+          if (custom && account == null)
             ListTile(
               leading: const Icon(Icons.restore),
               title: const Text('Use the default folder'),
@@ -273,7 +298,11 @@ Future<void> _chooseFolder(BuildContext context) async {
     ),
   );
   try {
-    if (choice == 'pick') {
+    if (choice == 'drive') {
+      await sync.useDrive();
+    } else if (choice == 'signout') {
+      await sync.signOutDrive();
+    } else if (choice == 'pick') {
       await sync.pickFolder();
     } else if (choice == 'reset') {
       await sync.useDefaultFolder();
@@ -508,7 +537,11 @@ class SettingsPage extends StatelessWidget {
                         title: const Text('Backup folder'),
                         subtitle: Text([
                           info?.label ?? '…',
-                          if (info != null && !info.syncs)
+                          if (info != null && info.onDrive)
+                            info.account!.isEmpty
+                                ? 'Tap to sign in to Google again.'
+                                : 'Signed in as ${info.account}.'
+                          else if (info != null && !info.syncs)
                             Platform.isIOS
                                 ? 'Choose a folder in iCloud Drive to reach '
                                     'your other devices.'

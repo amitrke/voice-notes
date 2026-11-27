@@ -13,7 +13,19 @@ class FolderInfo {
   /// reach another phone.
   final bool syncs;
 
-  const FolderInfo(this.label, {this.custom = false, this.syncs = true});
+  /// The Google account, when backups go to Google Drive: empty while it
+  /// is signed out.
+  final String? account;
+
+  const FolderInfo(
+    this.label, {
+    this.custom = false,
+    this.syncs = true,
+    this.account,
+  });
+
+  /// Backups go to Google Drive rather than a folder on the phone.
+  bool get onDrive => account != null;
 
   factory FolderInfo.fromMap(Map<Object?, Object?> m) => FolderInfo(
     '${m['label']}',

@@ -8,6 +8,7 @@ import 'data/backup_sync.dart';
 import 'data/notes_db.dart';
 import 'data/settings_store.dart';
 import 'services/backup_folder.dart';
+import 'services/drive_backup_folder.dart';
 import 'services/share_intake.dart';
 import 'ui/home_page.dart';
 import 'ui/theme.dart';
@@ -31,8 +32,17 @@ Future<void> main() async {
   unawaited(ShareIntake(
     onFile: (path) async => state.addAudio(await state.importFile(path)),
   ).start());
-  // Keeps this phone's backup in the backup folder up to date.
-  final backup = BackupSync(state, NativeBackupFolder());
+  // Keeps this phone's backup in the backup folder (or Google Drive) up to
+  // date.
+  final native = NativeBackupFolder();
+  final auth = GoogleDriveAuth();
+  final backup = BackupSync(
+    state,
+    BackupDestinations(
+      native,
+      DriveBackupFolder(auth, GoogleDriveFiles(auth), phone: native.device),
+    ),
+  );
   unawaited(backup.start());
   runApp(
     MultiProvider(

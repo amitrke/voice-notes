@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/widgets.dart';
 
 import '../services/backup_folder.dart';
+import '../services/drive_backup_folder.dart';
 import 'app_state.dart';
 
 /// A backup file in the backup folder, read and checked.
@@ -161,6 +162,34 @@ class BackupSync extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> useDefaultFolder() async => _moved(await folder.reset());
+
+  BackupDestinations? get _destinations {
+    final f = folder;
+    return f is BackupDestinations ? f : null;
+  }
+
+  /// Whether Google Drive can be chosen in this build.
+  bool get driveAvailable => _destinations?.driveAvailable ?? false;
+
+  /// Signs in to Google Drive and backs up there from now on. False when
+  /// the user cancels.
+  Future<bool> useDrive() async {
+    final d = _destinations;
+    if (d == null) return false;
+    final to = await d.useDrive();
+    if (to == null) return false;
+    error = null;
+    await _moved(to);
+    return true;
+  }
+
+  /// Signs out of Google Drive and goes back to the folder on the phone.
+  Future<void> signOutDrive() async {
+    final d = _destinations;
+    if (d == null) return;
+    error = null;
+    await _moved(await d.signOutDrive());
+  }
 
   Future<void> _moved(FolderInfo to) async {
     info = to;
