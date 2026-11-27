@@ -52,6 +52,9 @@ class SettingsStore {
   bool translate = true;
   bool autoSummary = true;
 
+  /// The first-run setup was finished or skipped.
+  bool setupDone = false;
+
   /// Keep this phone's backup file in the backup folder up to date.
   bool autoBackup = true;
   double textScale = defaultTextScale;
@@ -120,6 +123,7 @@ class SettingsStore {
     enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
+    setupDone = _prefs.getBool('setupDone') ?? false;
     autoBackup = _prefs.getBool('autoBackup') ?? true;
     // Before templates, clinical notes came from a use case setting, and
     // before that from a plain on/off switch.
@@ -313,6 +317,11 @@ class SettingsStore {
   Future<void> setAutoSummary(bool v) async {
     autoSummary = v;
     await _prefs.setBool('autoSummary', v);
+  }
+
+  Future<void> setSetupDone() async {
+    setupDone = true;
+    await _prefs.setBool('setupDone', true);
   }
 
   Future<void> setAutoBackup(bool v) async {

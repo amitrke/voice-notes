@@ -11,6 +11,7 @@ import 'services/backup_folder.dart';
 import 'services/drive_backup_folder.dart';
 import 'services/share_intake.dart';
 import 'ui/home_page.dart';
+import 'ui/setup_page.dart';
 import 'ui/theme.dart';
 
 Future<void> main() async {
@@ -28,6 +29,9 @@ Future<void> main() async {
     runApp(_StartupError('$e'));
     return;
   }
+  // Decided before shared audio can add a note, so opening the app for the
+  // first time by sharing a file into it still shows the setup.
+  final showSetup = needsFirstRunSetup(state);
   // Audio shared from other apps becomes a new note.
   unawaited(ShareIntake(
     onFile: (path) async => state.addAudio(await state.importFile(path)),
@@ -51,7 +55,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: settings.models),
         ChangeNotifierProvider.value(value: backup),
       ],
-      child: const VoiceNotesApp(),
+      child: VoiceNotesApp(showSetup: showSetup),
     ),
   );
 }
@@ -103,7 +107,10 @@ class _StartupError extends StatelessWidget {
 }
 
 class VoiceNotesApp extends StatelessWidget {
-  const VoiceNotesApp({super.key});
+  /// Start with the first-run setup ([needsFirstRunSetup]). Decided once at
+  /// launch, so saving a key during setup does not swap the page under it.
+  final bool showSetup;
+  const VoiceNotesApp({super.key, this.showSetup = false});
 
   @override
   Widget build(BuildContext context) {
@@ -125,7 +132,7 @@ class VoiceNotesApp extends StatelessWidget {
       },
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
-      home: const HomePage(),
+      home: showSetup ? const SetupPage() : const HomePage(),
     );
   }
 }
