@@ -8,6 +8,7 @@ import 'data/notes_db.dart';
 import 'data/settings_store.dart';
 import 'services/share_intake.dart';
 import 'ui/home_page.dart';
+import 'ui/setup_page.dart';
 import 'ui/theme.dart';
 
 Future<void> main() async {
@@ -35,7 +36,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: state),
         ChangeNotifierProvider.value(value: settings.models),
       ],
-      child: const VoiceNotesApp(),
+      child: VoiceNotesApp(showSetup: needsFirstRunSetup(state)),
     ),
   );
 }
@@ -87,7 +88,10 @@ class _StartupError extends StatelessWidget {
 }
 
 class VoiceNotesApp extends StatelessWidget {
-  const VoiceNotesApp({super.key});
+  /// Start with the first-run setup ([needsFirstRunSetup]). Decided once at
+  /// launch, so saving a key during setup does not swap the page under it.
+  final bool showSetup;
+  const VoiceNotesApp({super.key, this.showSetup = false});
 
   @override
   Widget build(BuildContext context) {
@@ -109,7 +113,7 @@ class VoiceNotesApp extends StatelessWidget {
       },
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
-      home: const HomePage(),
+      home: showSetup ? const SetupPage() : const HomePage(),
     );
   }
 }
