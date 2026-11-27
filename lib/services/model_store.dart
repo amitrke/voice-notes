@@ -126,27 +126,30 @@ final offlineModels = <OfflineModel>[
         'turbo-tokens.txt', _tokensSize, _tokensSha),
     canTranslate: false,
   ),
-  // Meta's Omnilingual ASR (the successor to MMS, Apache-2.0). One model for
-  // many languages, including the Indian ones, but it neither detects the
-  // language nor translates.
+  // Meta's Omnilingual ASR v2 CTC 300M (December 2025, Apache-2.0; the
+  // successor to MMS). One model for many languages, including the Indian
+  // ones, but it neither detects the language nor translates. The official
+  // sherpa-onnx export ships the int8 file only inside a tar.bz2 archive, so
+  // this is a single-file int8 made from the official fp32 export with
+  // onnxruntime dynamic quantization (clairemcw, the way sherpa-onnx made v1).
+  // Its tokens are byte-identical to the official ones.
   OfflineModel(
-    id: 'omnilingual',
+    id: 'omnilingual-v2',
     label: 'Many languages (Omnilingual)',
-    blurb: 'Meta model for 1,600+ languages, including Hindi, Tamil, '
-        'Telugu, Bengali and more. Transcribes only; it does not translate '
-        'or name the language.',
+    blurb: '1,600+ languages, including Hindi, Tamil, Telugu and Bengali. '
+        'Transcribes only; does not translate.',
     kind: ModelKind.omnilingual,
     encoder: ModelFile(
       'omnilingual-model.int8.onnx',
-      'https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/6abf1ece20cd2308bdb7d13cd78ec1c44fa4c094/model.int8.onnx',
-      365352120,
-      'e7c4e54ee4c4c47829cc6667d5d00ed8ea7bef1dcfeef0fce766f77752a2726c',
+      'https://huggingface.co/clairemcw/omnilingual-asr-300M-ctc-v2-int8/resolve/2f9e1a61183194f4902b340bc70cac619977dea7/model.int8.onnx',
+      328094351,
+      '41c9f319e8e157514be67a3d06e16a16bbae8d4fef5dc94849e4aec395b3bd82',
     ),
     tokens: ModelFile(
       'omnilingual-tokens.txt',
-      'https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/6abf1ece20cd2308bdb7d13cd78ec1c44fa4c094/tokens.txt',
-      86423,
-      'a7a044c52cb29cbe8b0dc1953e92cefd4ca16b0ed968177b6beab21f9a7d0b31',
+      'https://huggingface.co/clairemcw/omnilingual-asr-300M-ctc-v2-int8/resolve/2f9e1a61183194f4902b340bc70cac619977dea7/tokens.txt',
+      90630,
+      '7d99997ef207ff14c2cfe825f2aa037528ea250113cc3c6392bfe49326884ba6',
     ),
   ),
   // AI4Bharat IndicConformer (MIT), converted for sherpa-onnx by community
@@ -185,9 +188,9 @@ OfflineModel _indic(String code, String name, String commit, String modelSha,
         String converter = 'a community contributor'}) =>
     OfflineModel(
       id: 'indic-$code',
-      label: '$name only (IndicConformer)',
-      blurb: 'Made for $name only, so it cannot detect other languages or '
-          'translate. AI4Bharat model, converted by $converter.',
+      label: '$name only',
+      blurb: 'Made for $name only; no translation. AI4Bharat model, '
+          'converted by $converter.',
       kind: ModelKind.nemoCtc,
       language: code,
       encoder: ModelFile(
@@ -331,8 +334,25 @@ class ModelStore extends ChangeNotifier {
     for (final m in catalog) {
       if (await _complete(m)) _installed.add(m.id);
     }
+    await _removeRetired();
     _speakersInstalled = await _speakersComplete();
     notifyListeners();
+  }
+
+  /// Deletes the folder of a model that is no longer offered (an older
+  /// version replaced by a newer one), which the app could not list or delete.
+  Future<void> _removeRetired() async {
+    if (!await _root.exists()) return;
+    final keep = {...catalog.map((m) => m.id), 'vad', 'speakers'};
+    await for (final e in _root.list()) {
+      if (e is Directory && !keep.contains(p.basename(e.path))) {
+        try {
+          await e.delete(recursive: true);
+        } catch (_) {
+          // Left for the next start.
+        }
+      }
+    }
   }
 
   String _path(String folder, ModelFile f) => p.join(_root.path, folder, f.name);

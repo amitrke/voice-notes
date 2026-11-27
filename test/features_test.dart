@@ -610,7 +610,7 @@ void main() {
       expect(ids.toSet(), hasLength(ids.length));
       expect(
           ids,
-          containsAll(['omnilingual', 'indic-hi', 'indic-ta', 'indic-te',
+          containsAll(['omnilingual-v2', 'indic-hi', 'indic-ta', 'indic-te',
               'indic-ml']));
       for (final m in offlineModels) {
         for (final f in m.files) {
@@ -625,7 +625,7 @@ void main() {
 
     test('single-file models have no decoder and cannot translate', () {
       for (final id in [
-        'omnilingual',
+        'omnilingual-v2',
         'indic-hi',
         'indic-ta',
         'indic-te',
@@ -642,8 +642,8 @@ void main() {
       expect(offlineModelById('indic-hi')!.language, 'hi');
       expect(offlineModelById('indic-hi')!.encoder.url,
           contains('/ngiftsun/indicconformer-hi-int8-sherpa/'));
-      expect(offlineModelById('omnilingual')!.language, isNull);
-      expect(offlineModelById('omnilingual')!.kind, ModelKind.omnilingual);
+      expect(offlineModelById('omnilingual-v2')!.language, isNull);
+      expect(offlineModelById('omnilingual-v2')!.kind, ModelKind.omnilingual);
       expect(offlineModelById('base')!.canTranslate, isTrue);
       expect(offlineModelById('base')!.kind, ModelKind.whisper);
     });
