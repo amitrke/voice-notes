@@ -51,6 +51,9 @@ class SettingsStore {
   ProviderId? enrichment;
   bool translate = true;
   bool autoSummary = true;
+
+  /// Keep this phone's backup file in the backup folder up to date.
+  bool autoBackup = true;
   double textScale = defaultTextScale;
 
   /// Ids of the built-in templates offered under "Turn into…". The user's
@@ -117,6 +120,7 @@ class SettingsStore {
     enrichment = ProviderId.values.where((p) => p.name == e).firstOrNull;
     translate = _prefs.getBool('translate') ?? true;
     autoSummary = _prefs.getBool('autoSummary') ?? true;
+    autoBackup = _prefs.getBool('autoBackup') ?? true;
     // Before templates, clinical notes came from a use case setting, and
     // before that from a plain on/off switch.
     final useCase = _prefs.getString('useCase');
@@ -309,6 +313,11 @@ class SettingsStore {
   Future<void> setAutoSummary(bool v) async {
     autoSummary = v;
     await _prefs.setBool('autoSummary', v);
+  }
+
+  Future<void> setAutoBackup(bool v) async {
+    autoBackup = v;
+    await _prefs.setBool('autoBackup', v);
   }
 
   Future<void> setDeleteAudioAfter(bool v) async {

@@ -4,6 +4,18 @@
 <dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.subnext.voicenotes</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Voice Notes</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>None</string>
+		</dict>
+	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Voice Notes records audio so it can be transcribed.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

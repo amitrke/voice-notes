@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'data/app_state.dart';
+import 'data/backup_sync.dart';
 import 'data/notes_db.dart';
 import 'data/settings_store.dart';
+import 'services/backup_folder.dart';
 import 'services/share_intake.dart';
 import 'ui/home_page.dart';
 import 'ui/theme.dart';
@@ -29,11 +31,15 @@ Future<void> main() async {
   unawaited(ShareIntake(
     onFile: (path) async => state.addAudio(await state.importFile(path)),
   ).start());
+  // Keeps this phone's backup in the backup folder up to date.
+  final backup = BackupSync(state, NativeBackupFolder());
+  unawaited(backup.start());
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: state),
         ChangeNotifierProvider.value(value: settings.models),
+        ChangeNotifierProvider.value(value: backup),
       ],
       child: const VoiceNotesApp(),
     ),

@@ -13,6 +13,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val main = Handler(Looper.getMainLooper())
     private var share: MethodChannel? = null
+    private val backup by lazy { BackupFolder(this) }
 
     /** Copies of shared files not yet taken by Dart. Touched on the main thread only. */
     private val pendingShared = ArrayList<String>()
@@ -58,6 +59,9 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.subnext.voicenotes/backup")
+            .setMethodCallHandler { call, result -> backup.handle(call, result) }
+
         // Dart asks for shared files when it starts, and is told when more arrive.
         share = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.subnext.voicenotes/share")
             .also { channel ->
@@ -79,6 +83,13 @@ class MainActivity : FlutterActivity() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!backup.onResult(requestCode, resultCode, data)) {
+            super.onActivityResult(requestCode, resultCode, data)
         }
     }
 
