@@ -52,7 +52,7 @@ jobs:
       name: ${{ steps.version.outputs.name }}
       release_name: ${{ steps.version.outputs.release_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Work out the version
         id: version
@@ -95,8 +95,8 @@ jobs:
     env:
       HAS_PLAY_CREDENTIALS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -153,7 +153,7 @@ jobs:
 
       # Kept whether or not the upload runs. Play's API cannot create an app's
       # first release, so a first bundle may have to be uploaded by hand.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-aab-${{ needs.check.outputs.code }}
           path: build/app/outputs/bundle/release/app-release.aab
@@ -196,7 +196,7 @@ jobs:
       ASC_KEY_ID: ${{ vars.APP_STORE_CONNECT_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ vars.APP_STORE_CONNECT_ISSUER_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # App Store Connect rejects uploads built with an SDK older than Apple's
       # current minimum, and the runner's default Xcode can lag.
