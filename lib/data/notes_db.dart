@@ -130,6 +130,17 @@ class NotesDb {
 
   static const version = 8;
 
+  /// How long a deletion is remembered. A phone that was off for longer than
+  /// this may bring a note back; that is accepted.
+  static const deletionMemory = Duration(days: 90);
+
+  int get _deletionCutoff =>
+      DateTime.now().subtract(deletionMemory).millisecondsSinceEpoch;
+
+  /// Forgets deletions older than [deletionMemory].
+  Future<void> _pruneDeletions() => _db.delete('deleted_notes',
+      where: 'deleted_at < ?', whereArgs: [_deletionCutoff]);
+
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi. See [audioRoot].
   static Future<NotesDb> open(
@@ -189,6 +200,7 @@ class NotesDb {
     );
     final notes = NotesDb._(db, audioRoot);
     await notes._relativiseAudioPaths();
+    await notes._pruneDeletions();
     return notes;
   }
 
@@ -473,6 +485,7 @@ class NotesDb {
           final uid = d['uid'] as String?;
           final at = d['deleted_at'];
           if (uid == null || uid.isEmpty || at is! int) continue;
+          if (at < _deletionCutoff) continue;
           final local = await one('notes', 'uid = ?', [uid]);
           if (local != null) {
             // Changed here after it was deleted there: keep it.

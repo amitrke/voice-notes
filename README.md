@@ -93,7 +93,7 @@ clinical work before). Output is an AI-generated draft and must be reviewed by a
   folder reaches other devices) reads the other phones' backup files and merges
   them with `NotesDb.import(sync: true)`. Each note has a `uid` that is the same
   on every phone and an `updated_at`; the newer copy wins, and deleting a note
-  leaves a `deleted_notes` entry so it is not brought back (a later edit on
+  leaves a `deleted_notes` entry, kept 90 days, so it is not brought back (a later edit on
   another phone does bring it back). A replaced note keeps this phone's
   recordings. Restoring by hand never replaces or deletes: it only adds.
 

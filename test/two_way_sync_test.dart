@@ -285,6 +285,50 @@ void main() {
     expect(a.state.allNotes, hasLength(1));
   });
 
+  test('deletions are forgotten after 90 days', () async {
+    final path = p.join(tmp.path, 'ttl.db');
+    final first = await NotesDb.open(path: path, factory: databaseFactoryFfi);
+    await first.close();
+    final now = DateTime.now();
+    final raw = await databaseFactoryFfi.openDatabase(path);
+    await raw.insert('deleted_notes', {
+      'uid': 'old',
+      'deleted_at': now.subtract(const Duration(days: 91)).millisecondsSinceEpoch,
+    });
+    await raw.insert('deleted_notes', {
+      'uid': 'recent',
+      'deleted_at': now.subtract(const Duration(days: 89)).millisecondsSinceEpoch,
+    });
+    await raw.close();
+
+    final db = await NotesDb.open(path: path, factory: databaseFactoryFfi);
+    open.add(db);
+    final kept = (await db.export())['deleted_notes'] as List;
+    expect(kept.map((r) => (r as Map)['uid']), ['recent']);
+
+    // A deletion that old, arriving from another phone, is not applied.
+    final n = await db.insert(Note(
+      title: 'still here',
+      transcript: 'x',
+      provider: 'gemini',
+      createdAt: DateTime(2026, 11, 1),
+      status: NoteStatus.done,
+    ));
+    final uid = ((await db.export())['notes'] as List).cast<Map>().single['uid'];
+    final r = await db.import({
+      'version': NotesDb.version,
+      'deleted_notes': [
+        {
+          'uid': uid,
+          'deleted_at': now.subtract(const Duration(days: 200)).millisecondsSinceEpoch,
+        },
+      ],
+    }, sync: true);
+    expect(r.removed, 0);
+    expect(n.id, isNotNull);
+    expect(await db.all(), hasLength(1));
+  });
+
   test('a database from before ids gets them, and keeps its notes', () async {
     final path = p.join(tmp.path, 'v7.db');
     final raw = await databaseFactoryFfi.openDatabase(path,
