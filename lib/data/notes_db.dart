@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -40,6 +41,45 @@ const _noteTagsTable = '''
     tag_id INTEGER NOT NULL,
     PRIMARY KEY (note_id, tag_id)
   )''';
+
+/// Notes deleted on this phone, kept so syncing does not bring them back
+/// from another phone's backup. [uid] is the note's id across phones.
+const _deletedNotesTable = '''
+  CREATE TABLE IF NOT EXISTS deleted_notes (
+    uid TEXT PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
+  )''';
+
+final _random = Random.secure();
+
+/// A random id for a note, the same on every phone it is synced to.
+String newNoteUid() => List.generate(
+    16, (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+
+int _now() => DateTime.now().millisecondsSinceEpoch;
+
+/// What [NotesDb.import] did.
+class ImportResult {
+  /// Notes that were not here and now are.
+  final int added;
+
+  /// Notes replaced by a newer copy (sync only).
+  final int updated;
+
+  /// Notes removed because another phone deleted them (sync only).
+  final int removed;
+
+  /// Recordings of the removed notes, for the caller to delete.
+  final List<String> removedAudio;
+
+  const ImportResult(
+      {this.added = 0,
+      this.updated = 0,
+      this.removed = 0,
+      this.removedAudio = const []});
+
+  int get changed => added + updated + removed;
+}
 
 /// Tags a new install starts with; the user can rename or delete them.
 const starterTags = ['Grocery', 'To-do', 'Work', 'Health', 'Ideas'];
@@ -88,7 +128,7 @@ class NotesDb {
     }
   }
 
-  static const version = 7;
+  static const version = 8;
 
   /// Opens the database at [path] (default: the app's databases folder).
   /// [factory] lets tests use sqflite_common_ffi. See [audioRoot].
@@ -119,8 +159,11 @@ class NotesDb {
               folder_id INTEGER,
               speakers TEXT,
               tags_edited INTEGER NOT NULL DEFAULT 0,
-              outputs TEXT
+              outputs TEXT,
+              uid TEXT,
+              updated_at INTEGER NOT NULL DEFAULT 0
             )''');
+          await db.execute(_deletedNotesTable);
           await db.execute(_segmentsTable);
           await db.execute(_foldersTable);
           await _addTags(db);
@@ -140,6 +183,7 @@ class NotesDb {
             await _addTags(db);
           }
           if (from < 7) await _addColumn(db, 'notes', 'outputs');
+          if (from < 8) await _addSyncColumns(db);
         },
       ),
     );
@@ -154,6 +198,22 @@ class NotesDb {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == name)) return;
     await db.execute('ALTER TABLE $table ADD COLUMN $name $type');
+  }
+
+  /// v8: every note gets an id that is the same on every phone and a time it
+  /// was last changed, and deletions are remembered.
+  static Future<void> _addSyncColumns(Database db) async {
+    await _addColumn(db, 'notes', 'uid');
+    await _addColumn(db, 'notes', 'updated_at',
+        type: 'INTEGER NOT NULL DEFAULT 0');
+    await db.execute(_deletedNotesTable);
+    final rows = await db.query('notes',
+        columns: ['id', 'created_at'], where: "uid IS NULL OR uid = ''");
+    for (final r in rows) {
+      await db.update(
+          'notes', {'uid': newNoteUid(), 'updated_at': r['created_at']},
+          where: 'id = ?', whereArgs: [r['id']]);
+    }
   }
 
   /// v6: tag tables, seeded with [starterTags].
@@ -216,7 +276,8 @@ class NotesDb {
   /// Inserts [n] and its segments; returns them with ids.
   Future<Note> insert(Note n) {
     return _db.transaction((txn) async {
-      final id = await txn.insert('notes', _out(n.toMap()));
+      final id = await txn.insert('notes',
+          {..._out(n.toMap()), 'uid': newNoteUid(), 'updated_at': _now()});
       final segs = <Segment>[];
       for (final s in n.segments) {
         final withNote = s.copyWith(noteId: id);
@@ -228,11 +289,20 @@ class NotesDb {
   }
 
   /// Writes the note row only; segments are saved with [saveSegment].
-  Future<void> update(Note n) =>
-      _db.update('notes', _out(n.toMap()), where: 'id = ?', whereArgs: [n.id]);
+  Future<void> update(Note n) => _db.update(
+      'notes', {..._out(n.toMap()), 'updated_at': _now()},
+      where: 'id = ?', whereArgs: [n.id]);
+
+  /// Marks the note as changed now.
+  Future<void> _touch(DatabaseExecutor db, int? noteId) async {
+    if (noteId == null) return;
+    await db.update('notes', {'updated_at': _now()},
+        where: 'id = ?', whereArgs: [noteId]);
+  }
 
   /// Inserts the segment when it has no id yet; returns it with its id.
   Future<Segment> saveSegment(Segment s) async {
+    await _touch(_db, s.noteId);
     if (s.id == null) {
       return s.copyWith(id: await _db.insert('segments', _out(s.toMap())));
     }
@@ -241,10 +311,22 @@ class NotesDb {
     return s;
   }
 
-  Future<void> deleteSegment(int id) =>
-      _db.delete('segments', where: 'id = ?', whereArgs: [id]);
+  Future<void> deleteSegment(int id) async {
+    final row = await _db.query('segments',
+        columns: ['note_id'], where: 'id = ?', whereArgs: [id]);
+    if (row.isNotEmpty) await _touch(_db, row.first['note_id'] as int?);
+    await _db.delete('segments', where: 'id = ?', whereArgs: [id]);
+  }
 
+  /// Deletes the note and remembers that, so syncing does not bring it back.
   Future<void> delete(int id) => _db.transaction((txn) async {
+        final row = await txn.query('notes',
+            columns: ['uid'], where: 'id = ?', whereArgs: [id]);
+        final uid = row.isEmpty ? null : row.first['uid'] as String?;
+        if (uid != null && uid.isNotEmpty) {
+          await txn.insert('deleted_notes', {'uid': uid, 'deleted_at': _now()},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
         await txn.delete('segments', where: 'note_id = ?', whereArgs: [id]);
         await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [id]);
         await txn.delete('notes', where: 'id = ?', whereArgs: [id]);
@@ -290,6 +372,7 @@ class NotesDb {
   /// Replaces the note's tags with [tagIds].
   Future<void> setNoteTags(int noteId, Iterable<int> tagIds) =>
       _db.transaction((txn) async {
+        await _touch(txn, noteId);
         await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [noteId]);
         for (final t in tagIds.toSet()) {
           await txn.insert('note_tags', {'note_id': noteId, 'tag_id': t});
@@ -303,14 +386,29 @@ class NotesDb {
         for (final t in _backedUp) t: await _db.query(t),
       };
 
-  static const _backedUp = ['notes', 'segments', 'folders', 'tags', 'note_tags'];
+  static const _backedUp = [
+    'notes',
+    'segments',
+    'folders',
+    'tags',
+    'note_tags',
+    'deleted_notes',
+  ];
 
-  /// Adds the notes in [backup] (from [export], on this phone or another)
-  /// to the ones here. Folders and tags are matched by name; a note already
-  /// here (same time and text) is skipped, so restoring twice adds nothing.
-  /// Recordings are not in a backup, so restored notes have text only.
-  /// Returns how many notes were added.
-  Future<int> import(Map<String, Object?> backup) async {
+  /// Brings the notes in [backup] (from [export], on this phone or another)
+  /// into the ones here. Folders and tags are matched by name.
+  ///
+  /// By default it only adds: a note already here (same id, or same time
+  /// and text) is left alone, so restoring twice adds nothing and a restore
+  /// can bring back a note that was deleted since.
+  ///
+  /// With [sync], the newer copy of a note wins, and a note another phone
+  /// deleted is deleted here too, unless it was changed here after that.
+  ///
+  /// Recordings are not in a backup: added notes have text only, and a note
+  /// replaced by a newer copy keeps the recordings it had.
+  Future<ImportResult> import(Map<String, Object?> backup,
+      {bool sync = false}) async {
     final from = backup['version'];
     if (from is! int || from > version) {
       throw const FormatException(
@@ -336,6 +434,19 @@ class NotesDb {
         };
       }
 
+      Future<Map<String, Object?>?> one(
+          String table, String where, List<Object?> args) async {
+        final r =
+            await txn.query(table, where: where, whereArgs: args, limit: 1);
+        return r.isEmpty ? null : r.first;
+      }
+
+      Future<void> forget(int id) async {
+        await txn.delete('segments', where: 'note_id = ?', whereArgs: [id]);
+        await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [id]);
+        await txn.delete('notes', where: 'id = ?', whereArgs: [id]);
+      }
+
       final folders = <int, int>{};
       for (final f in rows('folders')) {
         final name = f['name'] as String;
@@ -353,26 +464,102 @@ class NotesDb {
             ? same.first['id'] as int
             : await txn.insert('tags', await fit('tags', t));
       }
+
+      // Deletions made on the other phone.
+      var removed = 0;
+      final removedAudio = <String>[];
+      if (sync) {
+        for (final d in rows('deleted_notes')) {
+          final uid = d['uid'] as String?;
+          final at = d['deleted_at'];
+          if (uid == null || uid.isEmpty || at is! int) continue;
+          final local = await one('notes', 'uid = ?', [uid]);
+          if (local != null) {
+            // Changed here after it was deleted there: keep it.
+            if ((local['updated_at'] as int? ?? 0) > at) continue;
+            final id = local['id'] as int;
+            for (final s in await txn.query('segments',
+                columns: ['audio_path'],
+                where: 'note_id = ?',
+                whereArgs: [id])) {
+              final path = _resolved((s['audio_path'] as String?) ?? '');
+              if (path.isNotEmpty) removedAudio.add(path);
+            }
+            await forget(id);
+            removed++;
+          }
+          final had = await one('deleted_notes', 'uid = ?', [uid]);
+          if (had == null || (had['deleted_at'] as int) < at) {
+            await txn.insert('deleted_notes', {'uid': uid, 'deleted_at': at},
+                conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+        }
+      }
+
+      // Note id in the backup -> note id here, for the notes taken from it.
       final notes = <int, int>{};
+      // Recordings of notes being replaced, by segment position.
+      final audio = <int, Map<int, String>>{};
+      var added = 0;
+      var updated = 0;
       for (final n in rows('notes')) {
-        final dup = await txn.query('notes',
-            columns: ['id'],
-            where: 'created_at = ? AND transcript = ?',
-            whereArgs: [n['created_at'], n['transcript'] ?? ''],
-            limit: 1);
-        if (dup.isNotEmpty) continue;
+        final uid = n['uid'] is String && (n['uid'] as String).isNotEmpty
+            ? n['uid'] as String
+            : null;
+        final at = (n['updated_at'] as int?) ?? (n['created_at'] as int? ?? 0);
+
+        var local = uid == null ? null : await one('notes', 'uid = ?', [uid]);
+        // Made before notes had ids, or by an older app.
+        local ??= await one('notes', 'created_at = ? AND transcript = ?',
+            [n['created_at'], n['transcript'] ?? '']);
+
+        if (local != null) {
+          if (!sync || at <= (local['updated_at'] as int? ?? 0)) continue;
+        } else if (uid != null) {
+          final gone = await one('deleted_notes', 'uid = ?', [uid]);
+          if (gone != null) {
+            // Deleted here: only a newer edit, or a restore, brings it back.
+            if (sync && (gone['deleted_at'] as int) >= at) continue;
+            await txn
+                .delete('deleted_notes', where: 'uid = ?', whereArgs: [uid]);
+          }
+        }
+
         final folder = n['folder_id'];
-        notes[n['id'] as int] = await txn.insert('notes', {
+        final row = {
           ...await fit('notes', n),
-          'audio_path': '',
+          'uid': uid ?? local?['uid'] ?? newNoteUid(),
+          'updated_at': at,
           'folder_id': folder is int ? folders[folder] : null,
-        });
+        };
+        if (local == null) {
+          notes[n['id'] as int] =
+              await txn.insert('notes', {...row, 'audio_path': ''});
+          added++;
+        } else {
+          final id = local['id'] as int;
+          audio[id] = {
+            for (final s in await txn.query('segments',
+                columns: ['position', 'audio_path'],
+                where: 'note_id = ?',
+                whereArgs: [id]))
+              s['position'] as int: (s['audio_path'] as String?) ?? '',
+          };
+          await txn.delete('segments', where: 'note_id = ?', whereArgs: [id]);
+          await txn.delete('note_tags', where: 'note_id = ?', whereArgs: [id]);
+          await txn.update('notes', row, where: 'id = ?', whereArgs: [id]);
+          notes[n['id'] as int] = id;
+          updated++;
+        }
       }
       for (final s in rows('segments')) {
         final note = notes[s['note_id']];
         if (note == null) continue;
-        await txn.insert('segments',
-            {...await fit('segments', s), 'note_id': note, 'audio_path': ''});
+        await txn.insert('segments', {
+          ...await fit('segments', s),
+          'note_id': note,
+          'audio_path': audio[note]?[s['position']] ?? '',
+        });
       }
       for (final l in rows('note_tags')) {
         final note = notes[l['note_id']];
@@ -381,7 +568,11 @@ class NotesDb {
         await txn.insert('note_tags', {'note_id': note, 'tag_id': tag},
             conflictAlgorithm: ConflictAlgorithm.ignore);
       }
-      return notes.length;
+      return ImportResult(
+          added: added,
+          updated: updated,
+          removed: removed,
+          removedAudio: removedAudio);
     });
   }
 

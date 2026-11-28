@@ -69,7 +69,7 @@ void main() {
     await fresh.init();
 
     final b = Map<String, Object?>.from(jsonDecode(file) as Map);
-    expect(await fresh.restore(b), 1);
+    expect((await fresh.restore(b)).added, 1);
     final restored =
         fresh.notes.firstWhere((x) => x.transcript == 'wash the dal');
     expect(restored.title, 'Title of wash the dal');
@@ -84,7 +84,7 @@ void main() {
     expect(fresh.notes, hasLength(2));
 
     // Restoring the same file again adds nothing.
-    expect(await fresh.restore(b), 0);
+    expect((await fresh.restore(b)).changed, 0);
     expect(fresh.notes, hasLength(2));
     await oldDb.close();
     await newDb.close();

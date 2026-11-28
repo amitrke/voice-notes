@@ -57,6 +57,9 @@ class SettingsStore {
 
   /// Keep this phone's backup file in the backup folder up to date.
   bool autoBackup = true;
+
+  /// Also bring in notes that other phones put in the backup folder.
+  bool autoImport = false;
   double textScale = defaultTextScale;
 
   /// Ids of the built-in templates offered under "Turn into…". The user's
@@ -125,6 +128,7 @@ class SettingsStore {
     autoSummary = _prefs.getBool('autoSummary') ?? true;
     setupDone = _prefs.getBool('setupDone') ?? false;
     autoBackup = _prefs.getBool('autoBackup') ?? true;
+    autoImport = _prefs.getBool('autoImport') ?? false;
     // Before templates, clinical notes came from a use case setting, and
     // before that from a plain on/off switch.
     final useCase = _prefs.getString('useCase');
@@ -327,6 +331,11 @@ class SettingsStore {
   Future<void> setAutoBackup(bool v) async {
     autoBackup = v;
     await _prefs.setBool('autoBackup', v);
+  }
+
+  Future<void> setAutoImport(bool v) async {
+    autoImport = v;
+    await _prefs.setBool('autoImport', v);
   }
 
   Future<void> setDeleteAudioAfter(bool v) async {

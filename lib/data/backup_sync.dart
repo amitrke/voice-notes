@@ -85,6 +85,7 @@ class BackupSync extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _changed();
     notifyListeners();
+    if (state.settings.autoImport) unawaited(importOthers());
   }
 
   @override
@@ -99,6 +100,9 @@ class BackupSync extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && this.state.settings.autoImport) {
+      unawaited(importOthers());
+    }
     if (state == AppLifecycleState.paused && _timer != null) {
       _timer!.cancel();
       _timer = null;
@@ -153,6 +157,50 @@ class BackupSync extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Backup files already brought in, by name, and when they were saved.
+  /// A file saved again is read again.
+  final _imported = <String, DateTime>{};
+  Future<int>? _importing;
+
+  /// When notes from other phones were last brought in.
+  DateTime? lastImported;
+
+  /// Brings in what the other phones' backup files hold: notes this phone
+  /// lacks, newer copies of notes, and notes deleted there. Skips this
+  /// phone's own file. Returns how many notes changed.
+  Future<int> importOthers() => _importing ??= _importOthers().whenComplete(
+        () => _importing = null,
+      );
+
+  Future<int> _importOthers() async {
+    var changed = 0;
+    try {
+      for (final e in await folder.list()) {
+        if (!e.name.toLowerCase().endsWith('.json') || e.name == fileName) {
+          continue;
+        }
+        if (_imported[e.name] == e.modified) continue;
+        try {
+          final data = jsonDecode(await folder.read(e.name));
+          if (data is! Map || data['format'] != backupFormat) continue;
+          final r = await state.restore(
+            Map<String, Object?>.from(data),
+            sync: true,
+          );
+          changed += r.changed;
+          _imported[e.name] = e.modified;
+        } catch (err) {
+          debugPrint('Could not import ${e.name}: $err');
+        }
+      }
+      lastImported = DateTime.now();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Could not look for other phones\' notes: $e');
+    }
+    return changed;
+  }
+
   /// Lets the user choose another folder, then writes a backup there.
   Future<bool> pickFolder() async {
     final picked = await folder.pick();
@@ -193,10 +241,18 @@ class BackupSync extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _moved(FolderInfo to) async {
     info = to;
+    _imported.clear();
+    if (state.settings.autoImport) unawaited(importOthers());
     _lastHash = null;
     lastSaved = null;
     notifyListeners();
     if (state.settings.autoBackup) await syncNow();
+  }
+
+  Future<void> setAutoImport(bool on) async {
+    await state.settings.setAutoImport(on);
+    if (on) await importOthers();
+    notifyListeners();
   }
 
   Future<void> setAuto(bool on) async {
