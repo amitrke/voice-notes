@@ -340,7 +340,7 @@ void main() {
 
     final found = await iSync.backups();
     expect(found.single.device, 'Pixel 8');
-    expect(await iphone.restore(found.single.data), 1);
+    expect((await iphone.restore(found.single.data)).added, 1);
     await iSync.syncNow();
     expect(await iSync.backups(), hasLength(2));
 

@@ -336,7 +336,8 @@ Future<void> _restoreFrom(
     ScaffoldMessengerState messenger, AppState state, Object? data) async {
   try {
     if (data is! Map) throw const FormatException();
-    final added = await state.restore(Map<String, Object?>.from(data));
+    final added =
+        (await state.restore(Map<String, Object?>.from(data))).added;
     messenger.showSnackBar(SnackBar(
         content: Text(added == 0
             ? 'Restored. Every note in the backup was already here.'
@@ -539,6 +540,23 @@ class SettingsPage extends StatelessWidget {
                           state.refresh();
                         },
                       ),
+                      if (info != null && info.syncs) ...[
+                        const Divider(),
+                        SwitchListTile(
+                          secondary: const Icon(Icons.sync_alt),
+                          title:
+                              const Text('Import notes from other phones'),
+                          subtitle: const Text(
+                              'Adds notes made on your other phones, takes '
+                              'the newer copy of a note you edited on both, '
+                              'and removes notes you deleted on them.'),
+                          value: s.autoImport,
+                          onChanged: (v) async {
+                            await sync.setAutoImport(v);
+                            state.refresh();
+                          },
+                        ),
+                      ],
                       const Divider(),
                       ListTile(
                         leading: const Icon(Icons.folder_outlined),

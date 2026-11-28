@@ -163,13 +163,19 @@ class AppState extends ChangeNotifier {
       };
 
   /// Adds what [b] (from [backup]) holds to this phone, keeping everything
-  /// already here. Returns how many notes were added.
-  Future<int> restore(Map<String, Object?> b) async {
+  /// already here. With [sync], also takes newer copies of notes and the
+  /// deletions made on the phone that wrote [b]. Says what changed.
+  Future<ImportResult> restore(Map<String, Object?> b,
+      {bool sync = false}) async {
     if (b['format'] != backupFormat) {
       throw const FormatException('This is not a Voice Notes backup.');
     }
-    final added =
-        await db.import(Map<String, Object?>.from(b['notes'] as Map));
+    final result = await db.import(
+        Map<String, Object?>.from(b['notes'] as Map),
+        sync: sync);
+    for (final path in result.removedAudio) {
+      await _deleteFile(path);
+    }
     final words = [for (final w in (b['dictionary'] as List?) ?? []) '$w'];
     if (words.isNotEmpty) {
       await settings.setDictionary(Dictionary.fromLines(
@@ -185,7 +191,7 @@ class AppState extends ChangeNotifier {
     _folders = await db.folders();
     _tags = await db.tags();
     notifyListeners();
-    return added;
+    return result;
   }
 
   Future<void> init() async {

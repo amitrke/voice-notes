@@ -89,6 +89,13 @@ clinical work before). Output is an AI-generated draft and must be reviewed by a
 - Automatic backups can also go to Google Drive (`drive.file` scope, a visible
   "Voice Notes" folder), which Android phones and iPhones share. It needs
   one-time Google Cloud setup: see [docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md).
+- "Import notes from other phones" (off by default, shown when the backup
+  folder reaches other devices) reads the other phones' backup files and merges
+  them with `NotesDb.import(sync: true)`. Each note has a `uid` that is the same
+  on every phone and an `updated_at`; the newer copy wins, and deleting a note
+  leaves a `deleted_notes` entry so it is not brought back (a later edit on
+  another phone does bring it back). A replaced note keeps this phone's
+  recordings. Restoring by hand never replaces or deletes: it only adds.
 
 ## Run
 

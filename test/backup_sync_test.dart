@@ -151,7 +151,7 @@ void main() {
     expect(found.single.notes, 1);
     expect(found.single.mine, isFalse);
 
-    expect(await fresh.restore(found.single.data), 1);
+    expect((await fresh.restore(found.single.data)).added, 1);
     expect(fresh.allNotes.single.transcript, 'wash the dal');
 
     // Now it has notes, the new phone writes its own file beside the old one.
